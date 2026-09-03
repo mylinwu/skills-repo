@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "f0274c05-b637-4018-aaef-8a06f38b93a3",
+  "path": "hotdaily",
+  "path_key": "hotdaily",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "done-0/hotdaily-skill/hotdaily",
+    "subpath": "hotdaily",
+    "branch": null
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "614c1e53-2617-46bf-acf9-fe901c3e2ded",
+  "path": "prompt-master",
+  "path_key": "prompt-master",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "nidhinjs/prompt-master/prompt-master",
+    "subpath": null,
+    "branch": null
+  }
+}

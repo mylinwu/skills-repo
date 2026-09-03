@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "7e94707b-23d2-4fa4-8ff1-1f60c8984cb4",
+  "path": "ai-daily-digest",
+  "path_key": "ai-daily-digest",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "vigorx777/ai-daily-digest/ai-daily-digest",
+    "subpath": null,
+    "branch": null
+  }
+}
