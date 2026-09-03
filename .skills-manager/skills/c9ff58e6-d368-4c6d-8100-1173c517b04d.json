@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "c9ff58e6-d368-4c6d-8100-1173c517b04d",
+  "path": "source-driven-development",
+  "path_key": "source-driven-development",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "addyosmani/agent-skills/source-driven-development",
+    "subpath": "skills\\source-driven-development",
+    "branch": null
+  }
+}
