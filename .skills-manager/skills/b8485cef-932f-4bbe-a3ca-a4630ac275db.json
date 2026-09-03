@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "b8485cef-932f-4bbe-a3ca-a4630ac275db",
+  "path": "design-md",
+  "path_key": "design-md",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "google-labs-code/stitch-skills/design-md",
+    "subpath": "plugins\\stitch-utilities\\skills\\design-md",
+    "branch": null
+  }
+}
