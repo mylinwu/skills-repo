@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "a723e846-97a4-4aaf-bf21-bae5e5e70077",
+  "path": "linuxdo-rss-digest",
+  "path_key": "linuxdo-rss-digest",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

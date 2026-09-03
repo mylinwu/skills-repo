@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "0d0029a5-48f2-4376-b277-75dfcf975e95",
+  "path": "writer-style-assistant",
+  "path_key": "writer-style-assistant",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}
