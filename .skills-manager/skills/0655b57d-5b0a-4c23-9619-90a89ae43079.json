@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "0655b57d-5b0a-4c23-9619-90a89ae43079",
+  "path": "firecrawl",
+  "path_key": "firecrawl",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "firecrawl/cli/firecrawl",
+    "subpath": "skills\\firecrawl",
+    "branch": null
+  }
+}
