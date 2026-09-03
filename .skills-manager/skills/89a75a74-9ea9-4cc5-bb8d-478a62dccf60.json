@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "89a75a74-9ea9-4cc5-bb8d-478a62dccf60",
+  "path": "planning-and-task-breakdown",
+  "path_key": "planning-and-task-breakdown",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

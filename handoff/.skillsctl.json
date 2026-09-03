@@ -1,0 +1,10 @@
+{
+  "source": {
+    "type": "github",
+    "value": "https://github.com/mattpocock/skills",
+    "url": "https://github.com/mattpocock/skills.git",
+    "skill": "handoff",
+    "importedAt": "2026-08-11T07:50:44.719Z",
+    "sourceHash": "fb41475c710510b0ed2760bb5e031055967ea58c620cc2c7026965af945c2252"
+  }
+}

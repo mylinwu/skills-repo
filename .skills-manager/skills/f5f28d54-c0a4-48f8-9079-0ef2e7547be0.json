@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "f5f28d54-c0a4-48f8-9079-0ef2e7547be0",
+  "path": "interview-me",
+  "path_key": "interview-me",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

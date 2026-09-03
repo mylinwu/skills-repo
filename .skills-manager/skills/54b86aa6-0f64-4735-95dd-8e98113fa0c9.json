@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "54b86aa6-0f64-4735-95dd-8e98113fa0c9",
+  "path": "hotdaily",
+  "path_key": "hotdaily",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "fa36b295-f947-472d-a6af-58b712c0316c",
+  "path": "ai-daily-digest",
+  "path_key": "ai-daily-digest",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

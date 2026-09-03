@@ -1,0 +1,10 @@
+{
+  "source": {
+    "type": "github",
+    "value": "https://github.com/mattpocock/skills",
+    "url": "https://github.com/mattpocock/skills.git",
+    "skill": "loop-me",
+    "importedAt": "2026-08-11T01:34:14.876Z",
+    "sourceHash": "c2cebbf134c337a043711598e6c5b3918f7f7bf5f770a16452c9faac2561c72f"
+  }
+}

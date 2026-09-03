@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "3780184f-f0e4-4359-b0a1-931292d533a5",
+  "path": "browser-act-skill-forge",
+  "path_key": "browser-act-skill-forge",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

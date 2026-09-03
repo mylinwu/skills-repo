@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "0557ecde-718f-4ce4-97c3-06b29cf8f683",
+  "path": "lenny-newsletter-analyzer",
+  "path_key": "lenny-newsletter-analyzer",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

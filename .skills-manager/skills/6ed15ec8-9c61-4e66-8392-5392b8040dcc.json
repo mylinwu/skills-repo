@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6ed15ec8-9c61-4e66-8392-5392b8040dcc",
+  "path": "doubt-driven-development",
+  "path_key": "doubt-driven-development",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}

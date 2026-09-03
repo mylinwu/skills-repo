@@ -1,0 +1,308 @@
+[
+  {
+    "title": "gemini3.1pro会员能弄到api吗",
+    "category": "开发调优",
+    "description_text": "如题，打算自己搞个gemini api但是又不想花太多钱（需求不是很大 一天估计最多也就300次左右）\n\n看网上有十几二十块卖gemini 3.1pro兑换码的（疑似是pixel渠道），问下这种渠道能弄到有gemini3.1 pro的api吗？有每日限额吗？\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428763",
+    "pubDate": "Thu, 18 Jun 2026 07:14:02 +0000",
+    "creator": "skylavender",
+    "source_type": "latest"
+  },
+  {
+    "title": "华为昇腾 0 Day 支持智谱 GLM-5.2 模型，提供全面推理优化",
+    "category": "前沿快讯",
+    "description_text": "[IT之家]6 月 18 日消息，“昇腾 AI 开发者”公众号 6 月 17 日宣布，昇腾 0 Day 支持 GLM-5.2，为编程与长程任务提供全面推理优化。\n\n据官方介绍，目前昇腾 A3 系列产品已经支持 GLM5.2 的单双机以及大 EP 推理部署。针对 GLM5.2 模型的结构特点，昇腾围绕以下几个关键技术开展了高效推理优化：\n\n**MOE 大融合算子：**将专家路由、加权计算与结果归约融合为统一算子，消除中间张量冗余读写，显著提升计算效率。\n\n**通信与计算融合：**通过将 AllReduce 优化为 ReduceScatter 与 AllGather 通信原语，并与矩阵计算形成紧耦合流水线，实现通信延迟的有效隐藏。\n\n**注意力前处理与多 Token 预测优化：**采用注意力前处理融合算子，结合多 Token 预测（MTP）机制的加速，提升单步生成效率。\n\n**高并发调度与预填充延迟机制：**在高并发混合负载场景下引入预填充延迟调度，平滑计算峰值，降低 Prefill 阶段对 Decode 阶段的资源抢占。\n\n**智能缓存与索引优化：**结合 IndexCache 技术缓存高频专家路径与静态路由表，并采用 Chunked Prefill、稀疏索引检索等方法，优化长上下文推理性能。\n\n**PD 分离与 Prefix Cache：**通过 Prefill 与 Decode 阶段分离及前缀缓存技术，压缩解码时延抖动，提升在线服务吞吐稳定性。\n\n极致 Infra 优化，Day 0 运行在国产算力平台：在 1M 上下文长度下，将单位 token 的 FLOPs 降低至 2.9 倍；已在 Day 0 完成与华为昇腾、平头哥、摩尔线程、寒武纪、昆仑芯、沐曦、海光、壁仞等国产算力平台的推理适配；预计下半年昇腾 950 超节点上市后，也将成为 GLM-5.2 强劲的算力底座\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428728",
+    "pubDate": "Thu, 18 Jun 2026 07:09:57 +0000",
+    "creator": "a12908",
+    "source_type": "latest"
+  },
+  {
+    "title": "公益站sub2api问题",
+    "category": "开发调优",
+    "description_text": "我自建的有sub2api，自己有2个plus账号，也有一些公益站屯的余额，主要还是any和君的，但是加进去以后没法用，如果单配置ccs有时候可以，是这两个站不允许sub2api吗，主要想集中管理，用一个url和key\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428722",
+    "pubDate": "Thu, 18 Jun 2026 07:09:28 +0000",
+    "creator": "廿四",
+    "source_type": "latest"
+  },
+  {
+    "title": "mimo的plan，大家使劲蹬",
+    "category": "福利羊毛",
+    "description_text": "加密key：dHAtY2tmaGNwdnQ5a2c3dnZtbzc4NTdyZjQzdWFsd2Y0MGlwYmVjZHR6Z2FlZDJ2ejE4\n\n兼容 OpenAI 接口协议： https://token-plan-cn.xiaomimimo.com/v1\n\n兼容 Anthropic 接口协议： https://token-plan-cn.xiaomimimo.com/anthropic\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428718",
+    "pubDate": "Thu, 18 Jun 2026 07:08:56 +0000",
+    "creator": "朝夕时",
+    "source_type": "latest"
+  },
+  {
+    "title": "glm5.2使用感受",
+    "category": "国产替代",
+    "description_text": "glm5.2一出来我就在用，刚开始体验感不错，现在到了下午高峰期就头疼，前几天还是时不时429，现在好了，完全都是卡死了，glm速度更新一下呀，完全受不了了\n\n            4 个帖子 - 4 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428716",
+    "pubDate": "Thu, 18 Jun 2026 07:08:30 +0000",
+    "creator": "superskeet",
+    "source_type": "latest"
+  },
+  {
+    "title": "想要训练一个chatgpt 5.5 同等能力的模型有多难",
+    "category": "国产替代",
+    "description_text": "想要训练一个chatgpt 5.5 同等能力的模型有多难\n\n            6 个帖子 - 5 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428707",
+    "pubDate": "Thu, 18 Jun 2026 07:08:06 +0000",
+    "creator": "lichunsheng",
+    "source_type": "latest"
+  },
+  {
+    "title": "Codex桌面端没有手机连接的选项",
+    "category": "开发调优",
+    "description_text": "使用环境：\n\n系统：windows10\n\nCodex桌面端版本号：26.6.11.62324（2026.06.17版本）\n\n左侧只有图中的几个选项，没有连接手机的选项\n\n是为什么？求各位佬帮忙答疑。现在工作需要远程codex\n\n            5 个帖子 - 3 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428679",
+    "pubDate": "Thu, 18 Jun 2026 07:04:54 +0000",
+    "creator": "一点都不酷",
+    "source_type": "latest"
+  },
+  {
+    "title": "CodexTeam 的额度好像又回升了?! (100刀->130+刀)",
+    "category": "开发调优",
+    "description_text": "如题，上个月开的 48 月优惠的 Team，前天刚刚扣了第二个月的钱，然后今天下午刚刚蹬完了 2 个号的 5h 发现限额从之前的 16 刀-> 22刀了，比例都是 16% 没变。\n\n            7 个帖子 - 4 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428672",
+    "pubDate": "Thu, 18 Jun 2026 07:04:33 +0000",
+    "creator": "Caphhh",
+    "source_type": "latest"
+  },
+  {
+    "title": "stackai转api?(个人感觉没啥用)",
+    "category": "开发调优",
+    "description_text": "先说总结(没啥用 而且刚刚去注册发现已经不能用域名邮箱注册,需要邀请了 +_+):\n\n调到codex可调用,但只能一问一答,且不能调用工具(不知道是不是模型本身的问题,当然也可能是鄙人太菜 毕竟都是ai搓出来的)\n\n试了免费所谓的GPT-5.5,Claude 4.5 Haiku,Gemini 3.5 Flash都不行\n\n本地食用方式\n\n#进入项目目录后执行\npip install -r requirements.txt\n\n#本地启动\npython -m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug\n\n或\n\n#本地启动\npython main.py\n\ndocker部署方式未验证\n\n-查看api的方式,替换py文件中的配置即可\n\n剧透\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428671",
+    "pubDate": "Thu, 18 Jun 2026 07:04:31 +0000",
+    "creator": "withoutsugar",
+    "source_type": "latest"
+  },
+  {
+    "title": "cc在终端中随着窗口变化会排版错乱",
+    "category": "开发调优",
+    "description_text": "如图我是在warp中使用的cc，最近发现有个问题，就是如果当前cc正在运行输出内容，然后此时我使用了横向或者纵向分屏，就会导致cc哪个窗口内容排版出现错乱，如果想恢复就得/resume，有点麻烦，这种问题大家有碰到过吗\n\n            4 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428661",
+    "pubDate": "Thu, 18 Jun 2026 07:03:34 +0000",
+    "creator": "shrugginG",
+    "source_type": "latest"
+  },
+  {
+    "title": "一个项目中，多个大模型在项目中的作用，比如ds,opus,gpt，glm适合处理哪部分",
+    "category": "开发调优",
+    "description_text": "有无佬知道一个项目中，多个大模型在项目中的作用，比如ds,opus,gpt适合处理哪部分，现在自己每次开发都是一个模型用到底，想用多个模型干活\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428657",
+    "pubDate": "Thu, 18 Jun 2026 07:03:18 +0000",
+    "creator": "图图DAG",
+    "source_type": "latest"
+  },
+  {
+    "title": "电信推出星辰智能体，TeleAgent，逆向出来的api的使用体验",
+    "category": "开发调优",
+    "description_text": "昨天看到了一个佬发的vibe项目（https://linux.do/t/topic/2419853/41?u=ricksanchezzz12301），下载到本地之后稍微修改了下，接到了codex和Claude发现模型表现非常垃圾经常给自己绕晕，不停的来回打转污染上下文\n\n，还是老老实实用hub的5.5吧\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428617",
+    "pubDate": "Thu, 18 Jun 2026 06:58:27 +0000",
+    "creator": "ricksanchezzz12301",
+    "source_type": "latest"
+  },
+  {
+    "title": "codex额度重置但我被二验",
+    "category": "开发调优",
+    "description_text": "今天我不小心退出了codex账号，然后再次进入突然要求要二验，我是开的土区的号，有佬遇见这种情况吗，这样的是不是这个号就废了。\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428614",
+    "pubDate": "Thu, 18 Jun 2026 06:58:17 +0000",
+    "creator": "zhang lei",
+    "source_type": "latest"
+  },
+  {
+    "title": "glm随手的问答",
+    "category": "国产替代",
+    "description_text": "刚才突然想玩一下glm模型 随手问了一下 \n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428590",
+    "pubDate": "Thu, 18 Jun 2026 06:55:48 +0000",
+    "creator": "bugcxy",
+    "source_type": "latest"
+  },
+  {
+    "title": "中微高级设备工程师（ETCH）有佬想来吗",
+    "category": "非我莫属",
+    "description_text": "来干半导体猎头了，有半导体行业的佬可以来看看机会哇，当然也有其他方向，佬可以私聊简历，给佬们匹配下哇\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428586",
+    "pubDate": "Thu, 18 Jun 2026 06:55:23 +0000",
+    "creator": "PANRDLD",
+    "source_type": "latest"
+  },
+  {
+    "title": "Mimo coding plan pro套餐，22号到期，还剩95%，用不完了，来蹬吧",
+    "category": "福利羊毛",
+    "description_text": "API_key:tp-cpjmiiz19wr3frcws8l7evriw5ni2ckr16z9w4y8gkornqqy\n\nOPENAI接口：https://token-plan-sgp.xiaomimimo.com/v1\n\nAnthropic 接口：https://token-plan-sgp.xiaomimimo.com/anthropic\n\n            4 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428582",
+    "pubDate": "Thu, 18 Jun 2026 06:55:07 +0000",
+    "creator": "liamliam",
+    "source_type": "latest"
+  },
+  {
+    "title": "🔥Torch中转站正式运营！开业专属福利来袭，盖楼送额度，开业期间每天大额福利key",
+    "category": "福利羊毛",
+    "description_text": "TorchAI.ai 中转站正式上线！开业专属福利来袭\n\n感谢各位佬友一路支持！新站全新启航，期待大家多多捧场，使用中有任何建议都欢迎随时反馈~\n\nTorchAI.ai 核心主营 GPT号池，自主搭建 Pro 账户池，全力保障稳定流畅的GPT调用体验\n\n无掺假、无套壳，只做真实、稳定、高性价比线路\n\n——————————————\n\n 站点入口信息：\n\n  \n      \n\n      torchai.ai\n  \n\n  \n    \n\nNew API\n\n  Unified AI API gateway and admin dashboard.\n\n  \n\n  \n    \n    \n  \n\n  \n\n 售后交流群：\n\n群号：906963109\n\n 充值优惠口令：\n\nlinuxDo\n\n 限时开业充值福利\n\n开业活动全周期可用，充值输入专属口令：\n\nlinuxDo\n\n全场充值立享 88折 特惠！\n\n优惠长期生效，后续会根据活动节奏调整折扣力度\n\nGPT:自建 Pro 号池,分组 CODEX 0.35x\n\n——————————————\n\n L站佬友限定福利\n\n所有活动仅面向TorchAI.ai注册用户开放\n\n 盖楼赠额度福利\n\n1–50楼层\n\n本评论区回复你的TorchAI.ai用户ID，直接领取 20 USD GPT Codex额度\n\n51–500楼层\n\n本评论区回复你的TorchAI.ai用户ID，直接领取 10 USD GPT Codex额度\n\n——————————————\n\n 楼层抽奖活动\n\n 每累计满100楼：随机抽取3位佬友，每人赠送20 USD GPT Codex额度\n\n 每累计满200楼：额外抽取1位幸运佬友，加码赠送50 USD GPT Codex额度\n\n——————————————\n\n 进群额外福利\n\n加入官方售后QQ群，群内不定时发放隐藏专属福利\n\n充值异常、额度漏发、线路调用故障均可在群内联系管理员快速处理\n\n售后QQ群号：906963109\n\n扫码直达群聊，随时咨询问题、领取群专属福利\n\n——————————————\n\n 活动规则须知\n\n活动赠送额度仅可用于指定模型，不支持退款、提现、转存\n\n充值退款时，赠送额度会同步清零不予保留\n\n恶意刷楼、无效ID、重复占位楼层，一律取消活动参与资格\n\n欢迎各位佬友注册体验，感恩大家的支持与信赖！\n\n            96 个帖子 - 90 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428574",
+    "pubDate": "Thu, 18 Jun 2026 06:53:18 +0000",
+    "creator": "xephyr",
+    "source_type": "latest"
+  },
+  {
+    "title": "求稳定的梯子",
+    "category": "开发调优",
+    "description_text": "求一个梯子，就是每个地区只有1个节点的这种梯子，就是等于是做了分布式负载均衡的那种；我之前用的有一个现在不稳定了；不要这种说有几百个节点的，几十个节点的这种梯子，没有意义节点延迟一下大一下低一下挂了这种靠无意义；有没有大佬用的有这种梯子呀，麻烦推荐感激不尽；\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428569",
+    "pubDate": "Thu, 18 Jun 2026 06:52:37 +0000",
+    "creator": "一点儿",
+    "source_type": "latest"
+  },
+  {
+    "title": "Mimo coding plan380亿credits，27号到期，需要的佬自取",
+    "category": "福利羊毛",
+    "description_text": "tp-ssjk7qmyszubmdb2ozetl4je1rb4gt9gcbsb7zyb10bxvica\n\nOPENAI接口：https://token-plan-sgp.xiaomimimo.com/v1\n\nAnthropic 接口：https://token-plan-sgp.xiaomimimo.com/anthropic\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428556",
+    "pubDate": "Thu, 18 Jun 2026 06:50:59 +0000",
+    "creator": "Suz5me",
+    "source_type": "latest"
+  },
+  {
+    "title": "any 配置 连接error",
+    "category": "开发调优",
+    "description_text": "any 按照公告配置baseurl 和 auth Token ，来着梯子，但是访问不了\n\n            7 个帖子 - 5 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428552",
+    "pubDate": "Thu, 18 Jun 2026 06:50:43 +0000",
+    "creator": "song9",
+    "source_type": "latest"
+  },
+  {
+    "title": "贴一下最近折腾短信模块的一些经验",
+    "category": "开发调优",
+    "description_text": "如果要弄短信转发，尽量买双槽带 WIFI 的 4G 模块，giffgaff、clubsim、hahasim 这种没有流量的卡很需要 WIFI。\n\nAir780E/Air600E/Air780EG/Air780EG 均不支持电信卡的短信；\n\nAir724UG 外接 esp8266 模块需要焊接，而且要在 esp 模块开发 + 串口通信，咸鱼上有类似的不推荐买；\n\n中移 ML307R 不支持 LuatOS 开发；\n\n推荐 Air8000w，还附带蓝牙和定位，其他功能倒是用不上。\n\n最近折腾的玩具，让 GPT5.5 参考已有项目和官方 demo 一点点改的，目前只测试完基本功能就先不放出来了。\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428547",
+    "pubDate": "Thu, 18 Jun 2026 06:50:24 +0000",
+    "creator": "eviundo",
+    "source_type": "latest"
+  },
+  {
+    "title": "给岳父配台修图的台式机，求推荐cpu和平台",
+    "category": "开发调优",
+    "description_text": "如题，岳父让我给他弄个台式机，主要是拍完照片做处理用。\n\n他现在用的是 Z8，但电脑不太会玩，估计也就只会用尼康自带的那个 NX Studio。显卡我有个破 1080，先给他凑合上，以后不够再升。现在主要是想问 CPU 和内存用啥。\n\nCPU 我不懂，我自己打游戏用的都是 AMD，9800X3D。但我看大家说搞摄影、搞修图的都用英特尔，想问一下用英特尔哪个性价比高点？够用就行。平台是不是上 DDR5 好一点？内存上到 32 是不是基本就够了？\n\n显示屏现在肯定是要买个 4K 的，不知道大家有没有推荐。我觉得刷新 60 应该就够了吧？估计还得找个色准好一点的，还是说现在 4K 色准都挺好了？再有就是好像现在 4K 144 或者 120 也挺便宜的，要不要上个高刷？\n\n谢谢大佬们\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428546",
+    "pubDate": "Thu, 18 Jun 2026 06:50:06 +0000",
+    "creator": "箫无人",
+    "source_type": "latest"
+  },
+  {
+    "title": "DeekSeek的多模态出了，有佬实测cc里能直接用吗",
+    "category": "国产替代",
+    "description_text": "目前在用官方推荐的reasonix，缓存率确实挺高\n\n但很多cc和codex的插件和skill要翻新适配\n\n大部分佬的公益站也不支持接reasonix\n\n想问有佬测试现在能在cc里正确使用ds的多模态功能了吗？\n\n            4 个帖子 - 4 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428525",
+    "pubDate": "Thu, 18 Jun 2026 06:48:04 +0000",
+    "creator": "RichardZSR",
+    "source_type": "latest"
+  },
+  {
+    "title": "玩玩deepseek识图",
+    "category": "国产替代",
+    "description_text": "我让gpt生成的样品图\n\n没有加任何prompt 就是放图片让他还原成html\n\n先放deepseek\n\n下面是aistudio上的3.1 pro\n\n3.5 flash\n\n            10 个帖子 - 9 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428503",
+    "pubDate": "Thu, 18 Jun 2026 06:45:25 +0000",
+    "creator": "风吹耳朵有点冷",
+    "source_type": "latest"
+  },
+  {
+    "title": "Skill 推荐用英文写，但是英文不好怎么办",
+    "category": "开发调优",
+    "description_text": "想写一些实际用起来的 skill，但是一直纠结中英文的事情。\n\n中文担心影响效果，英文担心后续都不知道 skill 的逻辑，导致每次只能让 AI 来帮我改，还容易改蹦。\n\n中英文双版本，每次挑战要改两个文件，也挺别扭。\n\n跟 AI 沟通，让 AI 来写 Skill\n\n留存中英文双版本，中文自己看，英文 AI 看\n\n直接用中文写，效果差不多\n\n我是英语大佬，英文阅读毫无压力\n\n我也在纠结\n\n点击以查看投票。\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428473",
+    "pubDate": "Thu, 18 Jun 2026 06:41:05 +0000",
+    "creator": "0xlic",
+    "source_type": "latest"
+  },
+  {
+    "title": "快过期了mimo 佬们使劲蹬 不要留情",
+    "category": "福利羊毛",
+    "description_text": "https://token-plan-cn.xiaomimimo.com/v1\n\nbase64解码：\n\nkey：dHAtYzV4dTlkc3hhbTl1eWQ2NHdtNDhvMzM0ZTc5NmN4NzR5NTB3YjdwdzUxdTBwaW1m\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428472",
+    "pubDate": "Thu, 18 Jun 2026 06:41:01 +0000",
+    "creator": "ecoeco",
+    "source_type": "latest"
+  },
+  {
+    "title": "glm5.2 的前端水平如何",
+    "category": "开发调优",
+    "description_text": "总比 gpt 强吧\n\n能打得过 gemini 和 claude 吗\n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428469",
+    "pubDate": "Thu, 18 Jun 2026 06:40:49 +0000",
+    "creator": "miaoxiansheng",
+    "source_type": "latest"
+  },
+  {
+    "title": "国产算力这块感觉似乎还真得靠华为了",
+    "category": "开发调优",
+    "description_text": "Z.ai - Inspiring AGI to Benefit Humanity\n\nDeepSeek官方和智谱官方都提到下半年的昇腾950超节点了。 我都想提前布局A股了。这几天吃了五六个涨停了。感觉在华为这边的产业链上也能吃到不少涨停。。。\n\n随着GLM系列的持续迭代与调用量的快速增长，线上服务的稳定性与效率愈发关键。GLM-5.2的线上推理依托多个国产算力平台，已在Day 0完成与华为昇腾、平头哥、摩尔线程、寒武纪、昆仑芯、沐曦、海光、壁仞、天数智芯等国产算力平台的推理适配，在国产芯片集群上实现高吞吐、低延迟、大并发的稳定运行。预计下半年昇腾 950 超节点上市后，也将成为GLM-5.2强劲的算力底座。\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428464",
+    "pubDate": "Thu, 18 Jun 2026 06:40:08 +0000",
+    "creator": "Kai Jiang",
+    "source_type": "latest"
+  },
+  {
+    "title": "【开源自荐】launchfit-ai出海体检官：国际食品展第二名的skills开源啦，给你的跨境商品生成一份卖前详细体检报告",
+    "category": "资源荟萃",
+    "description_text": "本帖使用社区开源推广，符合推广要求。我申明并遵循社区要求的以下内容：\n\n我的帖子已经打上 开源推广 标签： 是\n\n我的开源项目完整开源，无未开源部分： 是\n\n我的开源项目已链接认可 LINUX DO 社区： 是\n\n我帖子内的项目介绍，AI生成、润色内容部分已截图发出： 是\n\n以上选择我承诺是永久有效的，接受社区和佬友监督： 是\n\n以下为项目介绍正文内容，AI生成、润色内容已使用截图方式发出\n\n各位亲爱的佬友，上个月和队友一起打了场国际食品展的黑客松，拿到了第二名，最近把项目优化整理了出来，欢迎做跨境商品的各位佬友来体验试用，也欢迎一起共创！\n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428457",
+    "pubDate": "Thu, 18 Jun 2026 06:39:10 +0000",
+    "creator": "JL",
+    "source_type": "latest"
+  },
+  {
+    "title": "CC Switch接入gemini的api求助",
+    "category": "开发调优",
+    "description_text": "纯小白想用CCSwitch接gemini的api到Claude code里使用，但是一直显示错误，gemini的api在其他渠道接的时候能正常使用，但是这里一直报错，不清楚具体到底哪里出了问题，求助各位大佬   \n\n            1 个帖子 - 1 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428456",
+    "pubDate": "Thu, 18 Jun 2026 06:39:04 +0000",
+    "creator": "Carrie Chen",
+    "source_type": "latest"
+  },
+  {
+    "title": "网页版GPT降智",
+    "category": "开发调优",
+    "description_text": "开着Pro拓展，明晃晃的降智啊，直接不演了。\n\n啥原因啊？节点还是公司网络问题呀 \n\n            2 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428453",
+    "pubDate": "Thu, 18 Jun 2026 06:38:25 +0000",
+    "creator": "Gloomy",
+    "source_type": "latest"
+  },
+  {
+    "title": "当前 glm max 套餐的实际token额度",
+    "category": "国产替代",
+    "description_text": "16号老套餐过期续费的 周限额快满了。 大概也就是 周限额=8亿左右了。只能说远小于老套餐。。难怪要取消 \n\n            3 个帖子 - 3 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428435",
+    "pubDate": "Thu, 18 Jun 2026 06:36:38 +0000",
+    "creator": "lanvv",
+    "source_type": "latest"
+  },
+  {
+    "title": "关于 CPA 和 CC Switch 的使用场景，求佬友赐教",
+    "category": "开发调优",
+    "description_text": "目前我的使用场景大概是这样：\n\n上游主要有：\n\nChatGPT Plus\n\n一些公益站\n\n付费中转站\n\n使用环境是本地部署，个人使用。\n\n之前看社区教程，自己本地部署了一套 CPA。\n\nChatGPT Plus 用 OAuth 登录，付费中转站也在 CPA 里分别加了 Claude 和 OpenAI 两个提供商，因为同一个中转站同时支持这两种协议，然后分别设置了前缀，比如：\n\ncodex-A\nclaude-A\n\n日常使用的时候，我的 Codex 直接配置本地 CPA 地址。默认情况下应该是走 OAuth 的模型。\n\n如果想用中转站，就手动切换成：\n\n前缀 + 模型名\n\n比如类似：\n\ncodex-A/gpt-xxx\nclaude-A/claude-xxx\n\n最近又看到论坛里很多人提 CC Switch，看了一些帖子，也让 AI 帮忙分析了一下。现在我的理解大概是：\n\nCPA 管真实上游，CC Switch 管本地工具切换。\n\n我的疑问是：\n\n如果 CPA 里面本来就可以通过不同供应商前缀来切换上游，那 CC Switch 的实际作用是不是主要就是“方便切换”？\n\n比如我现在的理解是：\n\n不用 CC Switch 的时候：\n\nClaude / Codex → CPA → 各个上游\n\nCPA 可以通过默认路由走 OAuth / 随机 / 优先级，也可以通过“前缀 + 模型名”指定某个固定上游。\n\n缺点就是每次切换都要手动改模型名或者配置。\n\n用 CC Switch 的时候：\n\nClaude / Codex → CC Switch → CPA → 各个上游\n\nCC Switch 里面可以建多个配置，地址都指向同一个 CPA，只是每个配置用不同的 CPA 前缀模型。\n\n比如：\n\ncpa-oauth\ncpa-codex-A\ncpa-claude-A\n\n这样就不用每次手动改模型前缀，而是在 CC Switch 里点一下就能切不同上游。\n\n不知道我这个理解有没有偏差？\n\n另外还有点没搞清楚：\n\n什么场景只用 CPA 就够了？\n\n什么场景适合只用 CC Switch？\n\n什么场景适合 CPA + CC Switch 一起用？\n\n有没有佬友帮忙分析下。\n\n            3 个帖子 - 2 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428344",
+    "pubDate": "Thu, 18 Jun 2026 06:31:17 +0000",
+    "creator": "snakelis",
+    "source_type": "latest"
+  },
+  {
+    "title": "DeepSeek 员工陈小康表示识图模式已经上线在网站和App",
+    "category": "前沿快讯",
+    "description_text": "并且疑似测试新模型\n\n            7 个帖子 - 7 位参与者\n\n            阅读完整话题",
+    "link": "https://linux.do/t/topic/2428337",
+    "pubDate": "Thu, 18 Jun 2026 06:30:21 +0000",
+    "creator": "Bunn",
+    "source_type": "latest"
+  }
+]

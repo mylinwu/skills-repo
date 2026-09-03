@@ -1,0 +1,10 @@
+{
+  "source": {
+    "type": "github",
+    "value": "https://github.com/gargantuax/openskills",
+    "url": "https://github.com/gargantuax/openskills.git",
+    "skill": "gpt-image-2",
+    "importedAt": "2026-07-22T02:06:54.307Z",
+    "sourceHash": "2ee54b5219f280d8f4f89082e063c01eb360a5cde6326122a75f32a2efb0229a"
+  }
+}

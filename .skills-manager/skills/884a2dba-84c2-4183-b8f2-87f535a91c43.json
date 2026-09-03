@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "884a2dba-84c2-4183-b8f2-87f535a91c43",
+  "path": "huashu-design",
+  "path_key": "huashu-design",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}
