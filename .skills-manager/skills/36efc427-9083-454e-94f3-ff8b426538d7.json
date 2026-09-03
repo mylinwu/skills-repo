@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "36efc427-9083-454e-94f3-ff8b426538d7",
+  "path": "yingzao",
+  "path_key": "yingzao",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/op7418/guizang-yingzao-skill",
+    "subpath": "yingzao",
+    "branch": null
+  }
+}
