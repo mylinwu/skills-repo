@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "e10691c2-e5e3-4e03-ac1f-ca510392763c",
+  "path": "wan-weigang-modern-thinking-tools-100",
+  "path_key": "wan-weigang-modern-thinking-tools-100",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "local",
+    "ref": null,
+    "subpath": null,
+    "branch": null
+  }
+}
