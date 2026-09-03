@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "b9bf0122-f12c-4c50-95f8-19aad27c59ba",
+  "path": "hv-analysis",
+  "path_key": "hv-analysis",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "kkkkhazix/khazix-skills/hv-analysis",
+    "subpath": "hv-analysis",
+    "branch": null
+  }
+}
