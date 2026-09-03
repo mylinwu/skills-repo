@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "e019f706-494c-48f3-8395-e0efe6c2f57f",
+  "path": "research",
+  "path_key": "research",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "mattpocock/skills/research",
+    "subpath": "skills\\engineering\\research",
+    "branch": null
+  }
+}
