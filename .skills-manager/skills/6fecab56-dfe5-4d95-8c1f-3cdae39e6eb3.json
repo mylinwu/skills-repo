@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "6fecab56-dfe5-4d95-8c1f-3cdae39e6eb3",
+  "path": "jia-xingjia-perspective",
+  "path_key": "jia-xingjia-perspective",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/mylinwu/lw-skills/tree/main/skills",
+    "subpath": "skills\\jia-xingjia-perspective",
+    "branch": "main"
+  }
+}

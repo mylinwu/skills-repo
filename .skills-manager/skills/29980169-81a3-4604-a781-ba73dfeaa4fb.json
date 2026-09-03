@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "29980169-81a3-4604-a781-ba73dfeaa4fb",
+  "path": "wu-jun-perspective",
+  "path_key": "wu-jun-perspective",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/mylinwu/lw-skills/tree/main/skills",
+    "subpath": "skills\\wu-jun-perspective",
+    "branch": "main"
+  }
+}

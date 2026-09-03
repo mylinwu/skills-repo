@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "ac21aafb-b4dd-4c91-bfc3-211ef7839db3",
+  "path": "wanweigang-perspective",
+  "path_key": "wanweigang-perspective",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/mylinwu/lw-skills/tree/main/skills",
+    "subpath": "skills\\wanweigang-perspective",
+    "branch": "main"
+  }
+}
