@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "0f7cbfc1-b7d2-445c-addd-68893d6b0e19",
+  "path": "firecrawl-deep-research",
+  "path_key": "firecrawl-deep-research",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "firecrawl/firecrawl-workflows/firecrawl-deep-research",
+    "subpath": "skills\\firecrawl-deep-research",
+    "branch": null
+  }
+}
