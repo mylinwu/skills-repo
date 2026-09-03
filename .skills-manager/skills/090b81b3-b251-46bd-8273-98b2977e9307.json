@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "090b81b3-b251-46bd-8273-98b2977e9307",
+  "path": "summarize",
+  "path_key": "summarize",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "openclaw/openclaw/summarize",
+    "subpath": "skills\\summarize",
+    "branch": null
+  }
+}
