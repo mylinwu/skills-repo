@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "bdfc7afe-8737-411e-b87b-1e6e48c1c6d9",
+  "path": "remotion-best-practices",
+  "path_key": "remotion-best-practices",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "remotion-dev/skills/remotion-best-practices",
+    "subpath": "skills/remotion-best-practices",
+    "branch": null
+  }
+}
