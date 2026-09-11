@@ -29,6 +29,7 @@
 
 6. **排版垫图**
    - `typeset_compose.py` 报告 `passed=true`：字体 cmap、fallback、真实字面、碰撞、溢出、对齐组、primitive 禁穿区、遮挡契约与竖排顺序均通过。
+   - 每个展示层显式声明 `glyph_design_mode`；`literal` 使用 `guide_render: text`，`reinterpret` 使用 `guide_render: scaffold`，不能把全尺寸普通字体轮廓当作重绘垫图。
    - `text-behind-subject` 使用从 Image 1 轮廓得到的 `subject_front + subject-footprint`；规则线或空原因不能证明遮挡。
 
 7. **展示字形**
@@ -37,7 +38,10 @@
 
 8. **调用与输出**
    - 输入顺序、3–5 个身份不变量、必要短文案、方案数量、比例、质量和保存路径均已确定。
-   - 提示词符合 `image-generation-workflow.md` 的最小合同，没有 Token 列表、失败案例或检查清单。
+   - `recipe.json` 与 `design-plan.json` 已保存；全部启用 Token 恰好投递一次，四域 binding 都有当前对象、模型动作、可见结果与垫图标记，只有确定性校正项进入 `preprocess_tokens`。
+   - 手写提示词符合 `image-generation-workflow.md` 的最小合同，没有 Token 列表、失败案例、检查清单或手写 `Mechanism bindings`；主导参考的主体、背景和图文机制没有被禁项掏空。
+   - typeset spec/report、design plan 与最终编译提示词中的标记双向一致；没有只在文档出现、未真正进入 Image 3 或 ImageGen prompt 的设计机制。
+   - `scripts/prepare_generation.py` 返回 `READY`；随后只使用 `generation-call.json` 中的完整 `tool_arguments` 调用图像模型。
 
 任一硬门失败时在生成前修复或明确降级，不“先生成看看”。门控通过后只生成用户要求的数量。
 

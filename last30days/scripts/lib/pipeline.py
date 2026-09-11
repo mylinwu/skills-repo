@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import math
 import queue
 import re
@@ -69,6 +69,8 @@ from . import (
     topic_shape,
     truthsocial,
     trustpilot,
+    x_api,
+    x_envelope,
     x_judge,
     xai_x,
     xiaohongshu_api,
@@ -78,6 +80,7 @@ from . import (
 )
 from .cluster import cluster_candidates
 from . import fusion
+from . import render
 from .fusion import collapse_duplicate_urls, weighted_rrf
 
 DISCOVERY_SOURCES = ("reddit", "hackernews", "digg", "x")
@@ -113,11 +116,12 @@ MAX_SOURCE_FETCHES: dict[str, int] = {
 
 _FAILURE_SPECIFICITY = {
     health.AUTH_FAILED: 0,
-    health.RATE_LIMITED: 1,
-    health.SCHEMA_DRIFT: 2,
-    health.TIMEOUT: 3,
-    health.UNREACHABLE: 4,
-    health.ERROR: 5,
+    health.PAYMENT_REQUIRED: 1,
+    health.RATE_LIMITED: 2,
+    health.SCHEMA_DRIFT: 3,
+    health.TIMEOUT: 4,
+    health.UNREACHABLE: 5,
+    health.ERROR: 6,
 }
 
 
@@ -238,6 +242,8 @@ def available_sources(
     *,
     x_pending: bool | None = None,
     local_only: bool = False,
+    x_envelope: bool = False,
+    suppress_x_host_lane: bool = False,
 ) -> list[str]:
     """List the sources the next run can serve.
 
@@ -245,6 +251,13 @@ def available_sources(
     block): availability is answered from local evidence only, so the X
     check never spawns xurl's live ``whoami`` network call. Research-time
     callers keep the default live semantics.
+
+    X is listed when an engine backend is available, or browser auth is
+    pending, or the hosting model declared the X connector lane
+    (``env.x_host_lane_declared``), or a validated ``--x-posts`` envelope is
+    present for this run (``x_envelope``), in every cookie mode.
+    ``suppress_x_host_lane`` turns only the lane branch off (discovery
+    enrichment passes); an envelope still counts.
     """
     available: list[str] = []
     # reddit_public needs no API key - always available
@@ -256,6 +269,12 @@ def available_sources(
     if config.get("SCRAPECREATORS_API_KEY"):
         available.extend(["tiktok", "instagram"])
     if env.get_x_source(config, local_only=local_only):
+        available.append("x")
+    elif x_envelope or (
+        not suppress_x_host_lane and env.x_host_lane_declared(config)
+    ):
+        # Host-fetched X lane: the model passes connector results through
+        # --x-posts, so X is served without an engine backend.
         available.append("x")
     else:
         # Safe inspection (--diagnose/--preflight) skips browser-cookie
@@ -963,6 +982,10 @@ def enrich_nominations(
             lookback_days=lookback_days,
             as_of_date=as_of_date,
             internal_subrun=True,
+            # Enrichment passes never carry a connector envelope, so the
+            # per-session lane signal must not plan X in and record a
+            # spurious X error on every nominated topic.
+            suppress_x_host_lane=True,
         )
 
     # Daemon threads + a semaphore instead of ThreadPoolExecutor: executor
@@ -1789,7 +1812,11 @@ def diagnose(
     requested_sources: list[str] | None = None,
     *,
     safe: bool = False,
+    x_envelope: bool = False,
 ) -> dict[str, Any]:
+    # ``x_envelope`` is True when a validated --x-posts envelope is present for
+    # this invocation, so available_sources lists x even without a backend
+    # and the optional-source omission note does not fire.
     requested_sources = normalize_requested_sources(requested_sources)
     google_key = _google_key(config)
     x_status = env.get_x_source_status(config, probe=not safe)
@@ -1847,7 +1874,11 @@ def diagnose(
         "providers": providers_status,
         "local_mode": not reasoning_provider_available,
         "reasoning_provider": (config.get("LAST30DAYS_REASONING_PROVIDER") or "auto").lower(),
-        "x_backend": x_status["source"],
+        # The host-fetched connector lane serves X when no engine backend
+        # exists and the model declared the lane.
+        "x_backend": x_status["source"] or (
+            "connector" if env.x_host_lane_declared(config) else None
+        ),
         "bird_installed": x_status["bird_installed"],
         "bird_authenticated": x_status["bird_authenticated"],
         "bird_username": x_status["bird_username"],
@@ -1865,7 +1896,8 @@ def diagnose(
         # answer X availability from local evidence only. x_pending is
         # precomputed by diagnose() to avoid double evaluation.
         "available_sources": available_sources(
-            config, requested_sources, x_pending=x_pending, local_only=safe
+            config, requested_sources, x_pending=x_pending, local_only=safe,
+            x_envelope=x_envelope,
         ),
         "safe": safe,
         "config_source": config.get("_CONFIG_SOURCE"),
@@ -2000,10 +2032,17 @@ def run(
     trustpilot_domain_is_hint: bool = False,
     hiring_signals_mode: bool = False,
     internal_subrun: bool = False,
+    suppress_x_host_lane: bool = False,
     save_dir: Path | str | None = None,
     corpus_dirs: list[str] | None = None,
     corpus_all_time: bool = False,
+    x_posts: x_envelope.Envelope | None = None,
 ) -> schema.Report:
+    # ``suppress_x_host_lane`` is distinct from ``internal_subrun``: comparison
+    # entities share the latter and must still honor the connector lane;
+    # only discovery enrichment passes set the former.
+    # ``x_posts`` is a validated ``--x-posts`` envelope: when present
+    # it replaces the engine's X fetch for this run and is served once.
     # Standalone runs (not competitor/discover sub-runs) own the YouTube
     # search-cache lifecycle. Comparison fan-out clears once before submit so
     # parallel entity sub-runs can still share in-run hits.
@@ -2030,6 +2069,35 @@ def run(
     if corpus_enabled and requested_sources and "corpus" not in requested_sources:
         requested_sources = [*requested_sources, "corpus"]
 
+    # Host-fetched X lane. EXCLUDE_SOURCES=x or a --search list without
+    # x wins: the envelope is ignored with a receipt line and stays unconsumed.
+    envelope = x_posts
+    if envelope is not None and (
+        "x" in excluded_sources
+        or (requested_sources and "x" not in requested_sources)
+    ):
+        log.source_log(
+            "x", "host-fetched X: envelope ignored (x is excluded from this run)",
+            tty_only=False,
+        )
+        envelope = None
+    # The lane signal without an envelope is a broken handoff, not a reason to
+    # spend a backup backend: X records the fixed not-passed outcome.
+    x_lane_missing = (
+        envelope is None
+        and not mock
+        and not suppress_x_host_lane
+        and env.x_host_lane_declared(config)
+    )
+    if envelope is not None or x_lane_missing:
+        # Ride the config dict (the _polymarket_keywords idiom) so the stream
+        # workers and the handle-lane section see it without widening their
+        # signatures. Copy first: comparison entities shallow-copy the shared
+        # config and must never inherit another entity's envelope.
+        config = dict(config)
+        config["_x_envelope"] = envelope
+        config["_x_lane_missing"] = x_lane_missing
+
     # Gate StockTwits to ticker/crypto topics. Single chokepoint: when False,
     # available_sources() never registers stocktwits, so the planner can't
     # assign it (eligible_sources = available ∩ capabilities).
@@ -2047,7 +2115,11 @@ def run(
             available = [source for source in available if source != "jobs"]
     else:
         runtime, reasoning_provider = providers.resolve_runtime(config, depth)
-        available = available_sources(config, requested_sources)
+        available = available_sources(
+            config, requested_sources,
+            suppress_x_host_lane=suppress_x_host_lane,
+            x_envelope=envelope is not None,
+        )
         if requested_sources:
             available = [source for source in available if source in requested_sources]
     # Keep an explicitly requested but unconfigured corpus in the plan long
@@ -2082,6 +2154,7 @@ def run(
         planner.validate_external_plan(external_plan)
         plan = planner._sanitize_plan(
             external_plan, topic, available, planner_requested_sources, depth,
+            honor_plan_sources=True,
         )
         plan_source = "external"
     else:
@@ -2162,6 +2235,9 @@ def run(
         print("[Planner]   (no subqueries in plan)", file=sys.stderr)
 
     bundle = schema.RetrievalBundle(artifacts={"grounding": []})
+    if envelope is not None:
+        # The footer's X provenance reads "via X connector" (render._render_stats).
+        bundle.artifacts["x_provenance"] = "connector"
     # Handles the user named explicitly. Available before any retrieval, unlike
     # the entity-extracted set, so Phase 1 and quick-depth runs get first-party
     # protection too. Without this the exemption reached only the Phase 2
@@ -2173,6 +2249,15 @@ def run(
         for h in ([x_handle, github_user, *(x_related or [])])
         if h and h.strip()
     }
+    # Creator accounts named via --ig-creators / --creators carry the same
+    # explicit intent: the run is searching those accounts, and a creator's
+    # caption rarely repeats the topic's literal tokens, so without an
+    # exemption the relevance floor prunes them as third-party noise (issue
+    # #1101: 36 creator reels fetched, 0 reported). The exemption is scoped
+    # per platform, NOT merged into the global set: each flag names accounts
+    # on one platform, and an unrelated same-name account elsewhere must not
+    # bypass the floors.
+    creator_first_party = _creator_first_party_by_source(tiktok_creators, ig_creators)
     # Real X handles: --x-handle, --x-related, or @mentions in the topic. These
     # determine whether the deferred X floor applies. Topic words like "peter"
     # are NOT real handles and should not trigger the floor — when no real
@@ -2481,6 +2566,7 @@ def run(
                 freshness_mode=plan.freshness_mode,
                 ranking_query=subquery.ranking_query,
                 first_party_handles=explicit_first_party,
+                first_party_by_source=creator_first_party,
                 # X defers its relevance floor until resolved_handles exists.
                 # Everything else prunes here as before.
                 defer_relevance_prune=(source == "x"),
@@ -2539,6 +2625,7 @@ def run(
         tiktok_creators=tiktok_creators,
         ig_creators=ig_creators,
         first_party_handles=explicit_first_party,
+        first_party_by_source=creator_first_party,
         run_started=run_started,
     )
 
@@ -2578,7 +2665,13 @@ def run(
         h.lstrip("@").strip().lower()
         for h in supplemental_handles
         if h and h.strip()
-    }
+    } | {h for handles in creator_first_party.values() for h in handles}
+    # resolved_handles feeds rerank/fusion, where the first-party marks only
+    # resist demotion of items that already passed the inclusion floors and a
+    # named account is treated as the subject across surfaces. The inclusion
+    # gate (prune_low_relevance) instead gets the platform-scoped
+    # creator_first_party map so a cross-platform name collision cannot
+    # bypass the floors.
     # Real X handles from explicit flags, @mentions in topic, or Phase 2 discovery.
     # When no real handle is identified, skip the X floor entirely — a noisier
     # report beats losing the subject's evidence. Topic tokens like "peter" are
@@ -2595,16 +2688,34 @@ def run(
     # shape it always has. Only applied when we have real X handles — topic
     # tokens alone cannot identify the subject.
     if real_x_handles:
+        # IG/TikTok creator exemptions stay on their own platforms: a creator
+        # handle must not exempt a same-name X account from this floor. Only
+        # creator-ONLY handles are subtracted, where X provenance means
+        # real_x_handles (explicit X flags, @mentions in the topic, Phase 2
+        # discovery) - a plain topic token or --github-user match is NOT X
+        # provenance and does not preserve the exemption.
+        x_floor_handles = resolved_handles - _creator_only_handles(
+            creator_first_party, real_x_handles
+        )
         for key, stream in list(bundle.items_by_source_and_query.items()):
             if key[1] != "x" or not stream:
                 continue
-            bundle.items_by_source_and_query[key] = signals.prune_low_relevance(
-                stream, first_party_handles=resolved_handles
+            pruned = signals.prune_low_relevance(
+                stream,
+                first_party_handles=x_floor_handles,
+                first_party_by_source=creator_first_party,
             )
+            _log_prune_drop("x", len(stream), len(pruned), scope="per-query stream")
+            bundle.items_by_source_and_query[key] = pruned
         if bundle.items_by_source.get("x"):
-            bundle.items_by_source["x"] = signals.prune_low_relevance(
-                bundle.items_by_source["x"], first_party_handles=resolved_handles
+            x_stream = bundle.items_by_source["x"]
+            pruned = signals.prune_low_relevance(
+                x_stream,
+                first_party_handles=x_floor_handles,
+                first_party_by_source=creator_first_party,
             )
+            _log_prune_drop("x", len(x_stream), len(pruned), scope="merged stream")
+            bundle.items_by_source["x"] = pruned
 
     candidates = weighted_rrf(
         bundle.items_by_source_and_query,
@@ -2703,6 +2814,10 @@ def run(
     # marking the source PARTIAL would trip LAST30DAYS_STRICT_EXIT on runs that
     # returned good X results.
     warnings.extend(bundle.artifacts.get("x_partial_coverage", []))
+    # Backend receipts that are not failures (xapi's truncated window).
+    for stream_artifact in bundle.artifacts.get("grounding", []):
+        if isinstance(stream_artifact, dict):
+            warnings.extend(stream_artifact.get("x_receipts", []))
     library_context, library_warning = _load_library_context(
         topic=topic,
         config=config,
@@ -2971,6 +3086,72 @@ def _apply_reddit_stream_keepers(
     return kept[:limit]
 
 
+
+def _creator_first_party_by_source(
+    tiktok_creators: Iterable[str] | None,
+    ig_creators: Iterable[str] | None,
+) -> dict[str, set[str]]:
+    """Platform-scoped creator handles for the relevance prune.
+
+    --ig-creators names Instagram accounts and --creators names TikTok
+    accounts; each exemption applies only on its own platform. Merging both
+    into one global handle set would let an unrelated same-name account on
+    another platform bypass the relevance and engagement floors.
+    """
+
+    def _norm(handles: Iterable[str] | None) -> set[str]:
+        return {
+            h.lstrip("@").strip().lower()
+            for h in (handles or [])
+            if h and h.strip()
+        }
+
+    return {"instagram": _norm(ig_creators), "tiktok": _norm(tiktok_creators)}
+
+
+def _creator_only_handles(
+    creator_first_party: Mapping[str, set[str]],
+    *x_provenance_sets: Iterable[str],
+) -> set[str]:
+    """Creator handles that carry no X provenance.
+
+    A handle named ONLY via --ig-creators / --creators must not exempt a
+    same-name X account from the deferred X floor. But the same person is
+    often named on both surfaces (--x-handle foo --ig-creators foo): the
+    normalized sets collapse that to one string, so subtracting the whole
+    creator set would strip the explicitly requested X exemption too. The
+    subtraction therefore covers only handles absent from every
+    X-provenance set (explicit flags, topic mentions, Phase 2 discovery).
+    """
+    creator_flat = {h for handles in creator_first_party.values() for h in handles}
+    x_provenance = {h for handles in x_provenance_sets for h in handles}
+    return creator_flat - x_provenance
+
+
+def _log_prune_drop(
+    source: str, before: int, after: int, scope: str | None = None
+) -> None:
+    """Log when the relevance prune removes items from a stream.
+
+    The prune is silent by design inside ``signals`` (a pure function), but a
+    silent drop is invisible to the user: issue #1101 fetched 36 creator reels
+    and reported zero with no line explaining why. Log the count and the reason
+    class here, next to the other per-stream retrieval logs. The all-weak
+    ``filtered or items`` rescue keeps the originals, so before == after and
+    nothing is logged - a rescue is not a drop.
+    """
+    dropped = before - after
+    if dropped <= 0:
+        return
+    scope_note = f" ({scope})" if scope else ""
+    log.source_log(
+        render.SOURCE_LABELS.get(source, source.capitalize()),
+        f"relevance prune dropped {dropped} of {before} items below the "
+        f"relevance/engagement floor{scope_note}",
+        tty_only=False,
+    )
+
+
 def _normalize_score_dedupe(
     source: str,
     raw_items: list[dict],
@@ -2979,6 +3160,7 @@ def _normalize_score_dedupe(
     freshness_mode: str,
     ranking_query: str,
     first_party_handles: Iterable[str] | None = None,
+    first_party_by_source: Mapping[str, Iterable[str]] | None = None,
     defer_relevance_prune: bool = False,
 ) -> list[schema.SourceItem]:
     """Normalize, annotate, prune, dedupe, and extract snippets for a batch of raw items.
@@ -3023,9 +3205,13 @@ def _normalize_score_dedupe(
             # case where the handle never appears in the topic at all
             # ("Peter Steinberger" -> @steipete).
             floor_handles |= _batch_subject_handles(raw_items)
+        pre_prune_count = len(normalized)
         normalized = signals.prune_low_relevance(
-            normalized, first_party_handles=floor_handles
+            normalized,
+            first_party_handles=floor_handles,
+            first_party_by_source=first_party_by_source,
         )
+        _log_prune_drop(source, pre_prune_count, len(normalized))
     normalized = dedupe.dedupe_items(normalized)
     for item in normalized:
         item.snippet = snippet.extract_best_snippet(item, prepared_query)
@@ -3435,7 +3621,7 @@ def _legacy_artifact_outcome(
     return None
 
 
-def _summarize_lane_failures(failures: list[http.HTTPError]) -> str:
+def _summarize_lane_failures(failures: list[http.HTTPError], source: str = "") -> str:
     """One line naming what a source lost to swallowed sub-request failures.
 
     ``"3 sub-requests rate-limited (HTTP 429); 1 sub-request blocked (HTTP 403)"``.
@@ -3451,6 +3637,7 @@ def _summarize_lane_failures(failures: list[http.HTTPError]) -> str:
     labels = {
         health.RATE_LIMITED: "rate-limited",
         health.AUTH_FAILED: "blocked",
+        health.PAYMENT_REQUIRED: health.credits_exhausted_label(source),
         health.TIMEOUT: "timed out",
         health.UNREACHABLE: "unreachable",
         health.SCHEMA_DRIFT: "returned an unexpected shape",
@@ -3611,10 +3798,26 @@ def _run_supplemental_searches(
     resolved_handles_out: list[str] | None = None,
 ) -> None:
     """Phase 2: extract entities from Phase 1 results, run targeted supplemental searches."""
-    if depth == "quick" or mock:
+    from_date, to_date = date_range
+
+    # Host-fetched X lane: the envelope's lane calls replace the backend
+    # lanes and are served at every depth (the host already paid for them),
+    # before the quick/mock return and before the chain is recomputed.
+    # Extracted-handle promotion is skipped on envelope runs; a declared lane
+    # without an envelope runs no lane at all (the topic stream already
+    # recorded the not-passed outcome).
+    if config.get("_x_lane_missing"):
+        return
+    envelope = config.get("_x_envelope")
+    if envelope is not None:
+        _serve_envelope_lanes(
+            envelope, bundle=bundle, plan=plan, x_handle=x_handle, x_related=x_related,
+            from_date=from_date, to_date=to_date,
+        )
         return
 
-    from_date, to_date = date_range
+    if depth == "quick" or mock:
+        return
 
     # Convert SourceItems to dicts for entity_extract. All X items (whatever
     # backend fetched them — bird, xai, xurl, xquik) land under the single "x"
@@ -3699,7 +3902,7 @@ def _run_supplemental_searches(
         return
 
     # Pick the X handle-search backend: the first handle-capable backend in the
-    # chain (bird or xquik). These supplemental from:/mentions lanes are
+    # chain (grok, bird, xapi, or xquik). These supplemental from:/mentions lanes are
     # complementary to the topic search, so when the topic primary can't run
     # them (xai/xurl have no handle-lane implementation) but a capable backend
     # is available, use it rather than skipping Phase 2. bird scrapes X GraphQL
@@ -3711,7 +3914,7 @@ def _run_supplemental_searches(
     pinned = runtime.x_search_backend
     if pinned:
         chain = [pinned] + [b for b in chain if b != pinned]
-    primary = next((b for b in chain if b in ("grok", "bird", "xquik")), None)
+    primary = next((b for b in chain if b in ("grok", "bird", "xapi", "xquik")), None)
 
     # Name lane (posts naming the subject in plain text, no @-mention) is
     # grok-only for now: it needs phrase-quoting and negation operators the
@@ -3758,6 +3961,42 @@ def _run_supplemental_searches(
 
         def _about_lane(hs: list, count: int) -> tuple[list, bool]:
             return bird_x.search_mentions(hs, from_date, count_per=count), False
+    elif primary == "xapi":
+        # Direct X API v2 with the app-only bearer: from:/@ lanes run over
+        # search/all with the recent-search fallback. One budget shared by
+        # every lane below (same shape as the grok lanes): a slow key bounds
+        # the whole supplemental phase, not each call.
+        xapi_token = config.get("X_BEARER_TOKEN") or ""
+        xapi_deadline = time.monotonic() + x_api.LANE_BUDGET_SECONDS
+
+        def _xapi_lane_receipt(lane_warnings: list[str]) -> None:
+            # A deadline stop is incomplete coverage, reported in
+            # report.warnings (the x_partial_coverage artifact), never a
+            # healthy-looking silence and never a source failure.
+            sink = bundle.artifacts.setdefault("x_partial_coverage", [])
+            for note in lane_warnings:
+                line = f"X handle lanes: {note}"
+                if line not in sink:
+                    sink.append(line)
+
+        def _from_lane(hs: list, count: int, and_topic: bool = False) -> tuple[list, bool]:
+            # x_api.search_handles doesn't support and_topic; topic ranks only
+            lane_warnings: list[str] = []
+            items = x_api.search_handles(
+                hs, topic, from_date, to_date, count_per=count, token=xapi_token,
+                deadline=xapi_deadline, warnings=lane_warnings,
+            )
+            _xapi_lane_receipt(lane_warnings)
+            return items, False
+
+        def _about_lane(hs: list, count: int) -> tuple[list, bool]:
+            lane_warnings: list[str] = []
+            items = x_api.search_mentions(
+                hs, from_date, to_date, topic=topic, count_per=count, token=xapi_token,
+                deadline=xapi_deadline, warnings=lane_warnings,
+            )
+            _xapi_lane_receipt(lane_warnings)
+            return items, False
     elif primary == "xquik":
         xquik_token = env.get_xquik_token(config)
 
@@ -4008,6 +4247,7 @@ def _retry_thin_sources(
     tiktok_creators: list[str] | None = None,
     ig_creators: list[str] | None = None,
     first_party_handles: Iterable[str] | None = None,
+    first_party_by_source: Mapping[str, Iterable[str]] | None = None,
     run_started: float | None = None,
 ) -> None:
     """Retry sources with thin results using simplified core subject query."""
@@ -4092,6 +4332,7 @@ def _retry_thin_sources(
             freshness_mode=plan.freshness_mode,
             ranking_query=retry_subquery.ranking_query,
             first_party_handles=first_party_handles,
+            first_party_by_source=first_party_by_source,
             # Match Phase 1: X defers its relevance floor until the run has
             # resolved handles. Applying it here would discard a subject-
             # authored post that does not repeat the subject's name, and the
@@ -4141,8 +4382,12 @@ def _retry_thin_sources(
                 )
 
 
-def _fetch_x_backend(backend, query, from_date, to_date, depth, config):
+def _fetch_x_backend(backend, query, from_date, to_date, depth, config, warnings=None):
     """Fetch X items from a single backend. Returns (items, error_str).
+
+    ``warnings``, when given, collects backend receipts that are not
+    failures (xapi's "window truncated to 7 days" after the recent-search
+    fallback) so the X branch can surface them as run artifacts.
 
     Backends are tried in priority order by the caller (env.x_backend_chain);
     a non-empty error_str signals a hard failure (auth/payment/etc.) so the
@@ -4175,6 +4420,14 @@ def _fetch_x_backend(backend, query, from_date, to_date, depth, config):
     elif backend == "xquik":
         result = xquik.search_xquik(query, from_date, to_date, depth=depth, token=env.get_xquik_token(config))
         items = xquik.parse_xquik_response(result)
+    elif backend == "xapi":
+        result = x_api.search_x(config.get("X_BEARER_TOKEN") or "", query, from_date, to_date, depth=depth)
+        items = result.get("items", []) if isinstance(result, dict) else []
+        warning = result.get("warning") if isinstance(result, dict) else None
+        if warning:
+            print(f"[X] xapi: {warning}", file=sys.stderr)
+            if warnings is not None:
+                warnings.append(f"X: xapi {warning}")
     else:
         return [], f"unknown X backend: {backend}"
     err = result.get("error") if isinstance(result, dict) else ""
@@ -4273,13 +4526,131 @@ def _retrieve_stream(*args, **kwargs) -> tuple[list[dict], dict]:
             # the most specific failure state so a later empty filter result
             # or the thin-source retry can act on it.
             artifact = dict(artifact or {})
-            artifact["_source_outcome_detail"] = _summarize_lane_failures(failures)
+            artifact["_source_outcome_detail"] = _summarize_lane_failures(
+                failures, str(kwargs.get("source") or "")
+            )
             artifact["_source_outcome_detail_state"] = min(
                 failures, key=lambda f: _FAILURE_SPECIFICITY.get(f.outcome_state, 9)
             ).outcome_state
     if module_backed:
         http.fixture_source_record(fixture_request, [items, artifact])
     return items, artifact
+
+
+def _serve_envelope_topic(envelope: x_envelope.Envelope) -> tuple[list[dict], dict]:
+    """Serve the envelope's topic-lane rows once.
+
+    The first X subquery takes the rows and the envelope-status outcome;
+    every later call (a second planner subquery, judge-retry, thin-retry)
+    gets no items and no error, and no backend is ever consulted.
+    """
+    items = envelope.take_topic()
+    if items is None:
+        return [], {}
+    artifact: dict[str, Any] = {}
+    if envelope.warnings:
+        # A narrower host window is a receipt (report.warnings), not a failure.
+        artifact["x_receipts"] = [f"X: {warning}" for warning in envelope.warnings]
+    outcome = envelope.outcome()
+    if outcome is not None:
+        state, detail = outcome
+        artifact.update(_outcome_artifact(state, detail))
+    return items, artifact
+
+
+def _serve_envelope_lanes(
+    envelope: x_envelope.Envelope,
+    *,
+    bundle: schema.RetrievalBundle,
+    plan: schema.QueryPlan,
+    x_handle: str | None,
+    x_related: list[str] | None,
+    from_date: str,
+    to_date: str,
+) -> None:
+    """Serve the envelope's from/mention/related calls into the lane merge.
+
+    Mirrors the backend lanes: primary-handle rows (from + mention) join the
+    primary subquery with first-party handling for the explicit handle and
+    the per-handle lane counts; related rows join ``supplemental-related``
+    at the 0.3 weight. Lane claims were already validated at read time.
+    """
+    calls = envelope.take_lanes()
+    if not calls:
+        return
+    x_slug = "x"
+    existing_urls = {
+        item.url
+        for items in bundle.items_by_source.values()
+        for item in items
+        if item.url
+    }
+    ranking_query = plan.subqueries[0].ranking_query if plan.subqueries else ""
+    primary_label = plan.subqueries[0].label if plan.subqueries else "primary"
+    primary_handles = sorted(
+        {x_handle.lstrip("@").strip().lower()} if x_handle and x_handle.strip() else set()
+    )
+    related_handles = [
+        h.lstrip("@").strip().lower()
+        for h in (x_related or [])
+        if h.strip() and h.lstrip("@").strip().lower() not in primary_handles
+    ]
+
+    def _cap_per_author(posts: list[dict], cap: int) -> list[dict]:
+        seen: Counter[str] = Counter()
+        kept: list[dict] = []
+        for post in posts:
+            author = str(post.get("author_handle") or "").lower()
+            if seen[author] >= cap:
+                continue
+            seen[author] += 1
+            kept.append(post)
+        return kept
+
+    primary_items: list[dict] = []
+    related_items: list[dict] = []
+    for call in calls:
+        if call.lane == "from":
+            primary_items.extend(_cap_per_author(call.posts, FROM_LANE_COUNT_PER))
+        elif call.lane == "mention":
+            primary_items.extend(
+                call.posts[: MENTION_LANE_COUNT_PER * max(1, len(call.handles))]
+            )
+        elif call.lane == "related":
+            related_items.extend(_cap_per_author(call.posts, RELATED_HANDLE_COUNT_PER))
+
+    if primary_items:
+        normalized = _normalize_score_dedupe(
+            x_slug, primary_items, from_date, to_date,
+            freshness_mode=plan.freshness_mode,
+            ranking_query=ranking_query,
+            first_party_handles=primary_handles,
+        )
+        normalized = [item for item in normalized if item.url not in existing_urls]
+        if normalized:
+            bundle.add_items(primary_label, x_slug, normalized)
+            existing_urls.update(item.url for item in normalized if item.url)
+
+    if related_items:
+        normalized = _normalize_score_dedupe(
+            x_slug, related_items, from_date, to_date,
+            freshness_mode=plan.freshness_mode,
+            ranking_query=ranking_query,
+            first_party_handles=related_handles,
+        )
+        normalized = [item for item in normalized if item.url not in existing_urls]
+        if normalized:
+            bundle.add_items("supplemental-related", x_slug, normalized)
+            if not any(sq.label == "supplemental-related" for sq in plan.subqueries):
+                plan.subqueries.append(
+                    schema.SubQuery(
+                        label="supplemental-related",
+                        search_query=", ".join(related_handles),
+                        ranking_query=ranking_query,
+                        sources=[x_slug],
+                        weight=0.3,
+                    )
+                )
 
 
 def _retrieve_stream_impl(
@@ -4452,6 +4823,15 @@ def _retrieve_stream_impl(
             )
         return merged, {}
     if source == "x":
+        if config.get("_x_lane_missing"):
+            # The model declared the connector lane but passed no envelope.
+            return [], _outcome_artifact(health.ERROR, x_envelope.DETAIL_NOT_PASSED)
+        envelope = config.get("_x_envelope")
+        if envelope is not None:
+            # Host-fetched lane: the envelope replaces the backend chain and
+            # is single-serve, so no backend runs and no judge-retry follows.
+            return _serve_envelope_topic(envelope)
+
         # Compile X query from raw_topic (like Reddit/YouTube), not planner's
         # search_query which may contain operator strings like "Rome Italy".
         x_query = raw_topic or topic or subquery.search_query
@@ -4468,13 +4848,22 @@ def _retrieve_stream_impl(
         if not chain:
             raise RuntimeError("No X backend is available.")
         last_error = ""
+        chain_errors: list[str] = []
         items = []
         used_backend = None
+        x_warnings: list[str] = []
         for i, backend in enumerate(chain):
-            items, err = _fetch_x_backend(backend, x_query, from_date, to_date, depth, config)
+            items, err = _fetch_x_backend(
+                backend, x_query, from_date, to_date, depth, config, warnings=x_warnings,
+            )
             if items:
                 if i > 0:
-                    print(f"[X] primary backend(s) returned nothing; used fallback '{backend}'", file=sys.stderr)
+                    # xapi is metered: name the spend when it served as a backup.
+                    spend = " (spends X API credits)" if backend == "xapi" else ""
+                    print(
+                        f"[X] primary backend(s) returned nothing; used fallback '{backend}'{spend}",
+                        file=sys.stderr,
+                    )
                 # Check for auth errors before proceeding to judge-retry
                 if last_error:
                     # Fallback succeeded after earlier backend failed. Classify
@@ -4515,9 +4904,17 @@ def _retrieve_stream_impl(
                 break
             if err:
                 last_error = f"{backend}: {err}"
+                chain_errors.append(last_error)
                 print(f"[X] backend '{backend}' failed ({err}); trying next", file=sys.stderr)
 
         if not items and last_error:
+            # A credit-exhaustion failure earlier in the chain is the most
+            # specific outcome (top up, not re-authenticate); a later
+            # backend's generic failure must not mask it.
+            for candidate in chain_errors:
+                if http.classify_failure(message=candidate) == health.PAYMENT_REQUIRED:
+                    last_error = candidate
+                    break
             state = (
                 bird_x.classify_run_failure(last_error)
                 if last_error.startswith("bird:")
@@ -4528,6 +4925,11 @@ def _retrieve_stream_impl(
         # Retrieve-judge-retry: judge corpus and retry if off-topic flood.
         # Skip retry on quick/mock (same as Phase 2).
         artifact = {}
+        if x_warnings:
+            # e.g. xapi's "window truncated to 7 days": a receipt that reaches
+            # report.warnings (see the grounding artifacts walk in
+            # _build_report), never a source failure.
+            artifact["x_receipts"] = list(x_warnings)
         if items and depth != "quick" and not mock:
             items_for_judge = [
                 {"author_handle": it.get("author_handle", ""), "text": it.get("text", "")}

@@ -22,12 +22,12 @@ python3 scripts/design_tokens.py recipe <id> --json
 
 1. **几何**：照片主轴、身份轮廓与主体容器相容。横向桥/城墙不用窄塔字窗；宽阔多重檐不套高密度多窗；仰视飞檐不强行补成正立面。
 2. **画面拓扑**：主体占幅带、负空间位置/形状和计划互动边界相近。只有字体或颜色好看，但主体仍是未处理照片的参考应淘汰。
-3. **完整机制**：参考同时提供可迁移的主体处理、主动背景/色场、图文关系和材质层级。次要参考最多补充一个字体、取色或局部材质方法。
+3. **完整机制**：参考同时提供可迁移的主体处理、主动背景/色场、图文关系和材质层级。把准备迁移的 2–4 个强机制与禁止迁移内容分开写；如果禁项删掉了参考最醒目的图形、材质和主体处理，只剩抽象形容词，就不是有效主导参考。次要参考最多补充一个字体、取色或局部材质方法。
 4. **身份边界**：明确只迁移抽象机制，不迁移参考中的建筑、地名、人物、品牌、徽章、宗教符号和广告。
 
 ## 4. Token 关系
 
-每张海报只选一个 `layout-primary`、`subject-container`、`background-scale`、`context-material`、`expressive-type`、`glyph-morphology` 和 `line-policy`。递归展开 `requires`；任一 `conflicts` 或 mutex 超额即淘汰。兼容项可以加分，不要求把所有 Token 装入方案，更不把 Token prompt/constraints 串进最终提示词。
+每张海报只选一个 `layout-primary`、`subject-container`、`background-scale`、`context-material`、`expressive-type`、`glyph-morphology` 和 `line-policy`。递归展开 `requires`；任一 `conflicts` 或 mutex 超额即淘汰。兼容项可以加分，不要求启用所有 optional Token，也不逐条串接 Token 的通用 prompt/constraints；但已经进入 Recipe 的 resolved Token 与主动选择的 optional Token 必须全部并入 `design-plan.json` 的四域模型动作或允许的确定性预处理。
 
 ## 5. 常见照片方向
 

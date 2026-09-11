@@ -88,6 +88,53 @@ def retry_delay_from_headers(headers, fallback):
 MIN_DNS_RETRIES = 3
 USER_AGENT = "last30days-skill/3.0 (Assistant Skill)"
 
+# urllib copies almost all headers across 3xx; strip credentials when origin changes (#1062).
+_CROSS_ORIGIN_AUTH_HEADERS = frozenset(
+    {"authorization", "x-api-key", "x-csrf-token", "x-subscription-token"}
+)
+
+
+def _request_origin(url: str) -> tuple[str, str, int]:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if parts.port is not None:
+        port = parts.port
+    elif scheme == "https":
+        port = 443
+    elif scheme == "http":
+        port = 80
+    else:
+        port = 0
+    return scheme, host, port
+
+
+class _StripAuthOnCrossOriginRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        if _request_origin(req.full_url) != _request_origin(new.full_url):
+            for store in (new.headers, getattr(new, "unredirected_hdrs", None)):
+                if not store:
+                    continue
+                for name in list(store):
+                    if name.lower() in _CROSS_ORIGIN_AUTH_HEADERS:
+                        del store[name]
+        return new
+
+
+_opener = urllib.request.build_opener(_StripAuthOnCrossOriginRedirect)
+_DEFAULT_URLOPEN = urllib.request.urlopen
+
+
+def _open_request(req, timeout):
+    """Honor test patches of urllib.request.urlopen; otherwise use the strip opener."""
+    current = urllib.request.urlopen
+    if current is not _DEFAULT_URLOPEN:
+        return current(req, timeout=timeout)
+    return _opener.open(req, timeout=timeout)
+
 _failure_sink: ContextVar[Optional[list["HTTPError"]]] = ContextVar(
     "last30days_http_failure_sink",
     default=None,
@@ -147,10 +194,19 @@ def _scrub_fixture_value(
     return value
 
 
+_AUTH_SCHEME_RE = re.compile(r"^(?:bearer|basic|token)\s+(\S+)$", re.IGNORECASE)
+
+
 def _collect_secret_values(value: Any, *, key: str = "") -> set[str]:
     values: set[str] = set()
     if key and _is_secret_key(key) and value not in (None, ""):
-        values.add(str(value))
+        text = str(value)
+        values.add(text)
+        # "Bearer <token>": the bare token is what a response body or an
+        # adapter error message echoes, so redact it on its own too.
+        scheme = _AUTH_SCHEME_RE.match(text.strip())
+        if scheme:
+            values.add(scheme.group(1))
         return values
     if isinstance(value, dict):
         for child_key, child_value in value.items():
@@ -175,7 +231,54 @@ def _fixture_redactions(
         pass
     values.update(_collect_secret_values(headers))
     values.update(_collect_secret_values(json_data))
+    # Session-wide secret values (process env plus resolved config) so a
+    # bearer loaded from .env, Keychain, or pass is scrubbed at the HTTP
+    # seam even when this request carried it only in a header.
+    with _fixture_lock:
+        state = _fixture_state
+        if state is not None and state.get("redactions"):
+            values.update(state["redactions"])
     return frozenset(values)
+
+
+def config_secret_values(config: Dict[str, Any]) -> frozenset[str]:
+    """Secret VALUES from a resolved config, for fixture redaction.
+
+    Every key the Keychain/pass loader knows (``env.KEYCHAIN_KEYS``) plus any
+    secret-named key is a credential regardless of which layer supplied it.
+    """
+    values: set[str] = set()
+    try:
+        from . import env as _env
+        secret_keys = set(_env.KEYCHAIN_KEYS)
+    except Exception:  # pragma: no cover - env is always importable
+        secret_keys = set()
+    for key, value in (config or {}).items():
+        if not isinstance(value, str) or len(value) < 4:
+            continue
+        if "://" in value:
+            # An endpoint (e.g. an API base URL) is an address, not a credential.
+            continue
+        if key in secret_keys or _is_secret_key(key):
+            values.add(value)
+    return frozenset(values)
+
+
+def add_fixture_redactions(values) -> None:
+    """Register secret values with the active recording session, if any.
+
+    ``env.get_config`` calls this with the resolved config's secrets so a
+    bearer loaded from a file or a credential store is redacted at both the
+    HTTP seam and the module seam. A no-op outside a recording session.
+    """
+    extra = {v for v in values if isinstance(v, str) and len(v) >= 4}
+    if not extra:
+        return
+    with _fixture_lock:
+        state = _fixture_state
+        if state is None or state["mode"] != "record":
+            return
+        state["redactions"] = frozenset(state.get("redactions") or frozenset()) | extra
 
 
 def _scrub_fixture_url(url: str) -> str:
@@ -234,7 +337,9 @@ def recording_requests(path: str | Path):
             "source_exchanges": [],
             # Secret VALUES from the environment, so module-seam recordings
             # scrub tokens echoed inside normal string fields (adapter error
-            # messages, parsed item text), not just secret-named keys.
+            # messages, parsed item text), not just secret-named keys. The
+            # resolved config's secrets join via add_fixture_redactions once
+            # env.get_config runs inside the session.
             "redactions": frozenset(
                 value
                 for key, value in os.environ.items()
@@ -553,14 +658,28 @@ def classify_failure(*, status_code: Optional[int] = None, message: str = "") ->
         marker in text for marker in ("http 429", "status 429", "rate limit", "too many requests")
     ):
         return health.RATE_LIMITED
-    if status_code in (401, 402, 403) or any(
+    # Credit exhaustion is checked before the auth branch: a 402 (or a body
+    # saying the account has no credits) asks the user to top up, not to
+    # re-authenticate. Markers stay narrow on purpose: the bare word "credits"
+    # is not one ("10,000 free credits" is onboarding copy, not a failure).
+    if status_code == 402 or any(
+        marker in text
+        for marker in (
+            "http 402",
+            "status 402",
+            "payment required",
+            "insufficient credits",
+            "does not have any credits",
+            "out of credits",
+        )
+    ):
+        return health.PAYMENT_REQUIRED
+    if status_code in (401, 403) or any(
         marker in text
         for marker in (
             "http 401",
-            "http 402",
             "http 403",
             "status 401",
-            "status 402",
             "status 403",
             "unauthorized",
             "forbidden",
@@ -706,7 +825,7 @@ def request(
         return True
 
     def open_and_read(request_timeout: float) -> tuple[int, str]:
-        with urllib.request.urlopen(req, timeout=request_timeout) as response:
+        with _open_request(req, request_timeout) as response:
             return response.status, response.read().decode('utf-8')
 
     def open_and_read_before_deadline(
