@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "80196fe0-a0bd-4c90-8adc-4fa37e2f4c2b",
+  "path": "niwo-render-everything",
+  "path_key": "niwo-render-everything",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/montageai/niwo-render-everything",
+    "subpath": "skills\\niwo-render-everything",
+    "branch": null
+  }
+}
