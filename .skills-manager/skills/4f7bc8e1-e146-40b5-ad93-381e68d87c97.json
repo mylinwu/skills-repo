@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "4f7bc8e1-e146-40b5-ad93-381e68d87c97",
+  "path": "self-improving-agent",
+  "path_key": "self-improving-agent",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "alirezarezvani/claude-skills/self-improving-agent",
+    "subpath": ".gemini\\skills\\self-improving-agent",
+    "branch": null
+  }
+}
