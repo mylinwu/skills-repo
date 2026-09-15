@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "c25d22de-2d19-4a4e-879d-799edcbd3cea",
+  "path": "show-me",
+  "path_key": "show-me",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "humanlayer/skills/show-me",
+    "subpath": "plugins\\show-me\\skills\\show-me",
+    "branch": null
+  }
+}
