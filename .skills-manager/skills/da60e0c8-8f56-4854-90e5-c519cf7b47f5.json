@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "da60e0c8-8f56-4854-90e5-c519cf7b47f5",
+  "path": "claude-md-improver",
+  "path_key": "claude-md-improver",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "anthropics/claude-plugins-official/claude-md-improver",
+    "subpath": "plugins\\claude-md-management\\skills\\claude-md-improver",
+    "branch": null
+  }
+}
