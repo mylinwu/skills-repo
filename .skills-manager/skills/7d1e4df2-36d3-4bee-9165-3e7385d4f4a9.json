@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "7d1e4df2-36d3-4bee-9165-3e7385d4f4a9",
+  "path": "copy-editing",
+  "path_key": "copy-editing",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "coreyhaines31/marketingskills/copy-editing",
+    "subpath": "skills/copy-editing",
+    "branch": null
+  }
+}
