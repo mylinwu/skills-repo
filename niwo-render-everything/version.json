@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
-  "released": "2026-09-04",
+  "version": "1.0.1",
+  "released": "2026-09-11",
   "min_compatible": "1.0.0",
   "changelog": "https://github.com/MontageAI/niwo-render-everything/blob/main/skills/niwo-render-everything/CHANGELOG.md",
   "highlights": [
-    "第一个带版本号的版本，之后每次改动都会在这里留一条更新要点"
+    "含阿拉伯数字的词条不再注音，保留原文交给 TTS 朗读",
+    "不含数字的独立词条仍可纠音，拼音值中的声调数字不受限制"
   ]
 }
