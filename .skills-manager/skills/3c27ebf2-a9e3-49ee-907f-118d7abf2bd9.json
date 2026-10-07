@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "3c27ebf2-a9e3-49ee-907f-118d7abf2bd9",
+  "path": "huashu-art-motion",
+  "path_key": "huashu-art-motion",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "git",
+    "ref": "https://github.com/alchaincyf/huashu-art-motion",
+    "subpath": null,
+    "branch": null
+  }
+}
