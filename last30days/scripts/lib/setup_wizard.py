@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -18,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from . import brightdata
+from .private_files import write_private_text
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +124,7 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
             # firefox/safari stay as the silent fallbacks. Note: an explicit
             # comma list preserves this order (cookie_extraction_browsers);
             # "auto" would put the silent browsers first, so do not use it here.
-            cookie_config["FROM_BROWSER"] = "chrome,brave,edge,vivaldi,arc,chromium,firefox,safari"
+            cookie_config["FROM_BROWSER"] = "chrome,brave,edge,vivaldi,opera,arc,chromium,firefox,safari"
         browsers = cookie_extraction_browsers(cookie_config)
 
         for source_name, spec in COOKIE_DOMAINS.items():
@@ -301,6 +303,11 @@ def _run_npx_install(slug: str) -> Tuple[str, str]:
     npx = shutil.which("npx")
     if npx is None:
         return "no_npx", ""
+    print(
+        f"Installing {slug} CLI via npx ({PRINTING_PRESS_NPM} --cli-only) ...",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
         proc = subprocess.run(
             [npx, "-y", PRINTING_PRESS_NPM, "install", slug, "--cli-only"],
@@ -703,11 +710,12 @@ def write_api_key(
 
     Reuses the same secret-safe write path as ``write_setup_config`` so the
     value lands with restrictive permissions and round-trips through
-    ``env.load_env_file``. Idempotent by default: if ``key_name`` is already
-    present in the file, nothing is written and the existing value is
+    ``env.load_env_file``. Idempotent by default: if ``key_name`` already has
+    a nonempty parsed value, nothing is written and the existing value is
     preserved (we never clobber a key the user may have set by hand). With
     ``replace=True`` an existing line is rewritten in place instead, so an
     explicit ``setup --store-key`` can rotate a rejected credential.
+    Empty assignments are replaced so a signup key becomes usable.
 
     Args:
         env_path: Path to the .env file (e.g. ~/.config/last30days/.env).
@@ -732,7 +740,9 @@ def write_api_key(
                 stripped = line.strip()
                 if stripped and not stripped.startswith("#") and "=" in stripped:
                     if _env_line_key(stripped) == key_name:
-                        if replace:
+                        from .env import load_env_file
+
+                        if replace or not load_env_file(env_path).get(key_name):
                             return _replace_env_line(env_path, existing_content, key_name, api_key)
                         return True  # Already configured; do not duplicate
 
@@ -1374,8 +1384,9 @@ def run_github_start() -> Dict[str, Any]:
         path = _device_handle_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(handle), encoding="utf-8")
-            os.chmod(path, 0o600)
+            write_private_text(path, json.dumps(handle), encoding="utf-8")
+            if os.name != "posix":
+                os.chmod(path, 0o600)
         except Exception as exc:
             logger.warning("Could not persist device handle: %s", exc)
     return public

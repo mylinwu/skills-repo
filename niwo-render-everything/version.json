@@ -1,11 +1,13 @@
 {
   "schema_version": 1,
-  "version": "1.0.1",
-  "released": "2026-09-11",
-  "min_compatible": "1.0.0",
+  "version": "1.2.0",
+  "released": "2026-10-23",
+  "min_compatible": "1.2.0",
   "changelog": "https://github.com/MontageAI/niwo-render-everything/blob/main/skills/niwo-render-everything/CHANGELOG.md",
   "highlights": [
-    "含阿拉伯数字的词条不再注音，保留原文交给 TTS 朗读",
-    "不含数字的独立词条仍可纠音，拼音值中的声调数字不受限制"
+    "校验失败由外部 Agent 自主修复并复检，普通错误不结束任务",
+    "统一打包入口复验最终 ZIP，返回交付路径及 SHA-256",
+    "使用 Niwo 后端导出的字段协议，统一全部版面上传限制",
+    "信息动效版增加 reference_image，支持独立软件截图"
   ]
 }

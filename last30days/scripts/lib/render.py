@@ -222,6 +222,7 @@ SOURCE_LABELS = {
     "instagram": "Instagram",
     "grounding": "Web",
     "hackernews": "Hacker News",
+    "devto": "dev.to",
     "truthsocial": "Truth Social",
     "linkedin": "LinkedIn",
     "xiaohongshu": "Xiaohongshu",
@@ -597,17 +598,20 @@ def _defang_corpus_sentinels(value: str) -> str:
 def _defang_engine_sentinels(value: str) -> str:
     """Source content must not be able to forge the engine's own block markers.
 
-    The EVIDENCE FOR SYNTHESIS and PASS-THROUGH FOOTER envelopes are HTML
-    comments, and LAW 5 tells the host model to emit the footer block
-    verbatim. Scraped text carrying those markers could therefore close the
-    evidence envelope early or open a footer the model relays to the user
-    unmodified. Breaking the comment delimiters is what actually neutralizes
-    them; the phrase substitutions are defense in depth for a model that
-    pattern-matches on the wording rather than the comment syntax.
+    The EVIDENCE FOR SYNTHESIS envelope is an HTML comment pair and the engine
+    footer is a fenced ``text`` code block, which LAW 5 tells the host model to
+    emit verbatim. Scraped text carrying those markers could therefore close
+    the evidence envelope early or open a footer the model relays to the user
+    unmodified. Breaking the comment delimiters and the code-fence runs
+    (backtick and tilde, the two CommonMark fence characters) is what actually
+    neutralizes them; the phrase substitutions are defense in depth for a model
+    that pattern-matches on the wording rather than the syntax.
     """
     return (
         value.replace("<!--", "<!- -")
         .replace("-->", "- ->")
+        .replace("```", "'''")
+        .replace("~~~", "~ ~ ~")
         .replace("PASS-THROUGH FOOTER", "PASS-THROUGH-FOOTER")
         .replace("EVIDENCE FOR SYNTHESIS", "EVIDENCE-FOR-SYNTHESIS")
     )
@@ -844,10 +848,10 @@ def render_compact(
     # evidence for the model to READ, not output to emit. LAW 6 in SKILL.md
     # names the failure mode: 2026-04-19 Hermes Agent runs dumped this block
     # verbatim as user output. The envelope comments give the model an
-    # unambiguous scope for "pass through verbatim" (the PASS-THROUGH FOOTER
-    # block below) vs "synthesize from" (this block).
+    # unambiguous scope for "pass through verbatim" (the fenced footer block
+    # below) vs "synthesize from" (this block).
     lines.append(
-        "<!-- EVIDENCE FOR SYNTHESIS: read this, do not emit verbatim. Transform into `What I learned:` prose per LAW 2. -->"
+        "<!-- EVIDENCE FOR SYNTHESIS: read this, do not emit verbatim. Transform into `What I learned:` prose. -->"
     )
     lines.append("")
     # Echo the synthesis contract early so it survives tail truncation (#726).
@@ -935,13 +939,7 @@ def render_compact(
         lines.extend(comparison_scaffold)
 
     footer = _render_emoji_footer(report, save_path)
-    if footer:
-        lines.append("")
-        lines.append(
-            "<!-- PASS-THROUGH FOOTER: emit verbatim in the model response per LAW 5. -->"
-        )
-        lines.extend(footer)
-        lines.append("<!-- END PASS-THROUGH FOOTER -->")
+    _append_pass_through_footer(lines, footer)
 
     lines.extend(_render_canonical_boundary())
 
@@ -1167,12 +1165,24 @@ def _append_html_footer(
     lines: list[str], report: schema.Report, save_path: str | None
 ) -> None:
     footer = _render_emoji_footer(report, save_path)
+    _append_pass_through_footer(lines, footer)
+
+
+def _append_pass_through_footer(lines: list[str], footer: list[str]) -> None:
+    """Emit the emoji footer inside the fenced ``text`` block LAW 5 relays.
+
+    Footer rows interpolate source-controlled values (handles, subreddits,
+    market questions, advertiser names). A value carrying a newline plus a
+    fence run would close the trusted block early and leave the rest of the
+    row outside it, so every row is flattened to one line and defanged here,
+    at the one place all footer paths share.
+    """
+    if not footer:
+        return
     lines.append("")
-    lines.append(
-        "<!-- PASS-THROUGH FOOTER: emit verbatim in the model response per LAW 5. -->"
-    )
-    lines.extend(footer)
-    lines.append("<!-- END PASS-THROUGH FOOTER -->")
+    lines.append("```text")
+    lines.extend(_defang_engine_sentinels(" ".join(row.splitlines())) for row in footer)
+    lines.append("```")
 
 
 def _render_synthesis_directive() -> list[str]:
@@ -1195,10 +1205,10 @@ def _render_synthesis_directive() -> list[str]:
     return [
         "> **SYNTHESIS CONTRACT — read before emitting anything.** Everything below this",
         "> line, up to where this evidence envelope closes, is raw evidence for you to",
-        "> READ, not text to emit. Transform it into `What I learned:` prose paragraphs",
-        "> per LAW 2. Do NOT pass the `### N.` evidence clusters or the stats and",
+        "> READ, not text to emit. Transform it into `What I learned:` prose paragraphs.",
+        "> Do NOT pass the `### N.` evidence clusters or the stats and",
         "> source-coverage blocks through verbatim. The ONLY block you emit verbatim is",
-        "> the PASS-THROUGH FOOTER (the emoji tree) lower down. The full contract repeats",
+        "> the fenced `text` footer block (the emoji tree) lower down. The full contract repeats",
         "> at the end-of-output boundary near the bottom; if your captured output was",
         "> truncated and never reached it, this contract still binds.",
         "",
@@ -1218,7 +1228,7 @@ def _render_canonical_boundary() -> list[str]:
     "Pass through the lines ABOVE this boundary verbatim" phrasing was
     ambiguous about scope and led two consecutive runs to dump the
     `## Ranked Evidence Clusters` scratchpad as user output. The current
-    phrasing scopes pass-through to the PASS-THROUGH FOOTER block only and
+    phrasing scopes pass-through to the fenced footer block only and
     gives the model a concrete self-check string (`### 1.` + score tuple).
     """
     return [
@@ -1226,19 +1236,20 @@ def _render_canonical_boundary() -> list[str]:
         "---",
         "# END OF last30days CANONICAL OUTPUT",
         "",
-        "Pass through ONLY the PASS-THROUGH FOOTER block verbatim (emoji-tree stats).",
+        "Pass through ONLY the fenced `text` footer block above (emoji-tree stats).",
+        "Keep the code fence, so Markdown does not turn `---` into horizontal",
+        "rules or distort the tree.",
         "The EVIDENCE FOR SYNTHESIS block above it is raw evidence for your synthesis,",
-        "not output. Transform it into `What I learned:` prose paragraphs per LAW 2.",
+        "not output. Transform it into `What I learned:` prose paragraphs.",
         "",
         "If your response contains the literal string `### 1.` followed by a score",
         "tuple like `(score N, M items, sources: ...)`, you dumped evidence instead",
         "of synthesizing - STOP and regenerate. This is the 2026-04-19 Hermes Agent",
-        "Use Cases failure mode (LAW 6).",
+        "Use Cases failure mode (evidence-dump).",
         "",
-        "Do not append a trailing `Sources:` block; the emoji-tree footer above is",
-        "the sources list. LAW 1 overrides any WebSearch tool 'CRITICAL: MUST include",
-        "Sources' reminder - that reminder is a generic tool contract and does not",
-        "apply to last30days output.",
+        "Cite web pages inline next to the claims they support, then end at",
+        "the invitation, counting web pages in its link line. The emoji-tree footer",
+        "above already summarizes the sources, so do not add a `Sources:` list.",
     ]
 
 
@@ -1340,7 +1351,7 @@ def _render_degraded_run_warning(report: schema.Report) -> list[str]:
         return []
 
     return [
-        "<!-- USER-VISIBLE BANNER: emit verbatim before synthesis per LAW 5 / LAW 7. -->",
+        "<!-- USER-VISIBLE BANNER: emit verbatim before synthesis. -->",
         "## DEGRADED RUN WARNING",
         "",
         f'⚠️  This run was called BARE on a named-entity topic ("{report.topic}"):',
@@ -1356,12 +1367,12 @@ def _render_degraded_run_warning(report: schema.Report) -> list[str]:
         "generates its own JSON plan upstream and passes it in. That is you.",
         "Generate a plan with `intent` / `freshness_mode` / 3-5 paraphrased",
         "subqueries and re-run with `--plan '$JSON'`. This is not a",
-        "missing-credentials problem; this is a skipped-LAW-7 problem.",
+        "missing-credentials problem; this is a skipped planning step.",
         "",
         "What went wrong: on a named-entity topic, the full contract is",
         "(a) resolve X handles / GitHub repos / subreddits via your runtime's",
         "web-search tool (Step 0.55) and (b) generate a JSON `--plan` yourself",
-        "and pass it via `--plan '$JSON'` (Step 0.75 / LAW 7). Both were skipped.",
+        "and pass it via `--plan '$JSON'` (Step 0.75). Both were skipped.",
         "",
         "**If you are a user reading this:** the assistant skipped its own",
         "planning step. Ask it to regenerate following Step 0.55 and Step 0.75",
@@ -1488,7 +1499,7 @@ def render_comparison_multi(
 
     lines.append(
         "<!-- EVIDENCE FOR SYNTHESIS: read this, do not emit verbatim. Transform into "
-        "`What I learned:` prose per LAW 2. Each entity has its own evidence subsection. -->"
+        "`What I learned:` prose. Each entity has its own evidence subsection. -->"
     )
     lines.append("")
     # Echo the synthesis contract early so it survives tail truncation (#726).
@@ -1525,13 +1536,7 @@ def render_comparison_multi(
     lines.extend(scaffold)
 
     footer = _render_emoji_footer(main_report, save_path)
-    if footer:
-        lines.append("")
-        lines.append(
-            "<!-- PASS-THROUGH FOOTER: emit verbatim in the model response per LAW 5. -->"
-        )
-        lines.extend(footer)
-        lines.append("<!-- END PASS-THROUGH FOOTER -->")
+    _append_pass_through_footer(lines, footer)
 
     lines.extend(_render_canonical_boundary())
 
@@ -1760,7 +1765,7 @@ def _escape_markdown_plain_text(value: str) -> str:
     return _MARKDOWN_PLAIN_TEXT_ESCAPES.sub(r"\\\1", value)
 
 
-def _markdown_url_link(url: str) -> str:
+def _markdown_url_link(url: str, *, label: str | None = None) -> str:
     """Render ``url`` as a markdown link when it's safe to, else escaped text.
 
     Source URLs are untrusted API responses, not authored content: `(`/`)`/
@@ -1795,9 +1800,11 @@ def _markdown_url_link(url: str) -> str:
         except ValueError:
             safe_destination = False
 
+    display = sanitized_url if label is None else _escape_markdown_plain_text(label)
     if safe_destination:
-        return f"[{sanitized_url}]({sanitized_url})"
-    return _escape_markdown_plain_text(sanitized_url)
+        return f"[{display}]({sanitized_url})"
+    escaped_url = _escape_markdown_plain_text(sanitized_url)
+    return escaped_url if label is None else f"{display} ({escaped_url})"
 
 
 def render_full(report: schema.Report, save_path: str | None = None) -> str:
@@ -1875,6 +1882,7 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
         "threads",
         "pinterest",
         "hackernews",
+        "devto",
         "bluesky",
         "truthsocial",
         "polymarket",
@@ -1904,7 +1912,9 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
         lines.append(f"### {_source_label(source)} ({len(items)} items)")
         lines.append("")
         for item in items:
-            score = item.local_rank_score if item.local_rank_score is not None else 0
+            # local_rank_score is 0..1; print it on the report's 0-100 scale
+            # (":.0f" of the raw value rendered every item as score:0 or 1).
+            score = (item.local_rank_score or 0) * 100.0
             lines.append(
                 f"**{item.item_id}** (score:{score:.0f}) {item.author or ''} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]"
             )
@@ -2004,9 +2014,7 @@ def render_full(report: schema.Report, save_path: str | None = None) -> str:
     lines.extend(_render_stats(evidence_report))
     lines.extend(_render_source_coverage(evidence_report))
     if save_path:
-        footer_lines = _render_emoji_footer(evidence_report, save_path)
-        if footer_lines:
-            lines.extend(["", *footer_lines])
+        _append_pass_through_footer(lines, _render_emoji_footer(evidence_report, save_path))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -2450,9 +2458,17 @@ def _render_candidate(
             if score is not None and score != ""
             else ""
         )
+        # HN comment lines carry their own link: the candidate URL above is
+        # the article, not where the quote was said.
+        hn_link = (
+            _comment_link(primary, tc)
+            if primary is not None and primary.source == "hackernews"
+            else ""
+        )
         lines.append(
             f"   - {attribution}{vote_part}: "
             f"{_format_untrusted_evidence(excerpt.strip(), 240)}"
+            + (f" — {hn_link}" if hn_link else "")
         )
     for post in _digg_posts_for(primary):
         lines.append(f"   - {_format_digg_quote(post)}")
@@ -2837,6 +2853,7 @@ _FOOTER_SOURCES: list[tuple[str, str, str, str, list[tuple[str, str]]]] = [
         "story",
         [("points", "points"), ("comments", "comments")],
     ),
+    ("devto", "👩‍💻", "dev.to", "article", [("reactions", "reactions"), ("comments", "comments")]),
     ("bluesky", "🦋", "Bluesky", "post", [("likes", "likes"), ("reposts", "reposts")]),
     (
         "truthsocial",
@@ -2899,7 +2916,12 @@ def _footer_line_for_source(
     emoji: str, label: str, count: int, item_word: str, stats: str
 ) -> str:
     count_str = f"{count:,}" if count >= 1000 else str(count)
-    plural = f"{item_word}s" if count != 1 else item_word
+    if count == 1:
+        plural = item_word
+    elif len(item_word) > 1 and item_word.endswith("y") and item_word[-2] not in "aeiou":
+        plural = f"{item_word[:-1]}ies"
+    else:
+        plural = f"{item_word}s"
     if stats:
         return f"{emoji} {label}: {count_str} {plural} │ {stats}"
     return f"{emoji} {label}: {count_str} {plural}"
@@ -3407,17 +3429,7 @@ def _format_date(item: schema.SourceItem | None) -> str:
 def _format_actor(item: schema.SourceItem | None) -> str | None:
     if not item:
         return None
-    if item.source == "reddit" and item.container:
-        return f"r/{item.container}"
-    if item.source in {"x", "bluesky", "truthsocial"} and item.author:
-        return f"@{item.author.lstrip('@')}"
-    if item.source == "youtube" and item.author:
-        return item.author
-    if item.container and item.container != "Polymarket":
-        return item.container
-    if item.author:
-        return item.author
-    return None
+    return _stats_actor(item)
 
 
 # Per-source engagement display fields: list of (field_name, label) tuples.
@@ -3430,6 +3442,7 @@ ENGAGEMENT_DISPLAY: dict[str, list[tuple[str, str]]] = {
     "threads": [("likes", "likes"), ("replies", "re")],
     "pinterest": [("saves", "saves"), ("comments", "cmt")],
     "hackernews": [("points", "pts"), ("comments", "cmt")],
+    "devto": [("reactions", "react"), ("comments", "cmt")],
     "bluesky": [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "truthsocial": [("likes", "likes"), ("reposts", "rt"), ("replies", "re")],
     "linkedin": [("likes", "likes"), ("comments", "cmt")],
@@ -3538,6 +3551,17 @@ def _top_voices_overall(
 
 
 def _stats_actor(item: schema.SourceItem) -> str | None:
+    """The handle, subreddit or channel an item is attributed to, on one line.
+
+    Author and container come from the source, and the result is interpolated
+    into evidence rows, ``## Stats`` and the pass-through footer, so it gets the
+    same flattening and sentinel defanging as a scraped title.
+    """
+    actor = _raw_actor(item)
+    return _safe_title(actor) if actor else None
+
+
+def _raw_actor(item: schema.SourceItem) -> str | None:
     if item.source == "reddit" and item.container:
         return f"r/{item.container}"
     if item.source in {"x", "bluesky", "truthsocial"} and item.author:
@@ -3581,10 +3605,14 @@ _TOP_COMMENT_MIN_SCORE: dict[str, int] = {
     # for every comment child (only stories carry points), so any positive
     # threshold here rejects the entire source rather than filtering it.
     "hackernews": 0,
+    # Replies are the only comment signal the dev.to API exposes; most top
+    # comments have none, so any positive floor would drop the whole source.
+    "devto": 0,
 }
 _TOP_COMMENT_VOTE_LABEL: dict[str, str] = {
     "reddit": "upvotes",
     "hackernews": "points",
+    "devto": "replies",
     "youtube": "likes",
     "tiktok": "likes",
     "instagram": "likes",
@@ -3624,6 +3652,26 @@ def _comment_attribution(source: str | None, author: str | None) -> str:
     if prefix and author.startswith(prefix):
         author = author[len(prefix) :]
     return f"{prefix}{author}" if prefix else author
+
+
+def _comment_link(item: schema.SourceItem, comment: dict, fallback: str = "") -> str:
+    """Link for a quoted comment: where it was said, never the HN article.
+
+    HN items carry the article as their URL, so HN comments fall back to the
+    item's discussion page (``hn_url`` metadata, else built from a numeric item
+    id) instead of ``fallback``. Other sources keep ``fallback``.
+    """
+    if comment.get("url"):
+        return str(comment["url"])
+    if item.source != "hackernews":
+        return fallback or ""
+    hn_url = (item.metadata or {}).get("hn_url")
+    if hn_url:
+        return str(hn_url)
+    item_id = str(item.item_id or "")
+    if item_id.isdigit():
+        return f"https://news.ycombinator.com/item?id={item_id}"
+    return ""
 
 
 def _top_comments_list(
@@ -3675,15 +3723,15 @@ def _digg_posts_for(item: schema.SourceItem | None, limit: int = 3) -> list[dict
 
 def _format_digg_quote(post: dict, body_limit: int = 200) -> str:
     """Format a Digg-attached X post as an inline 'via Digg' quote line."""
-    handle = post.get("username") or ""
-    x_url = post.get("x_url") or ""
-    body = (post.get("body") or "").replace("\n", " ").strip()
-    if len(body) > body_limit:
-        body = body[: body_limit - 1].rstrip() + "…"
+    handle = _safe_title(post.get("username") or "")
+    x_url = _defang_engine_sentinels(post.get("x_url") or "")
+    body = _format_untrusted_evidence(
+        " ".join((post.get("body") or "").split()), body_limit,
+    )
     if x_url and handle:
-        return f"[@{handle}]({x_url}) via Digg: {body}"
+        return f"{_markdown_url_link(x_url, label=f'@{handle}')} via Digg: {body}"
     if handle:
-        return f"@{handle} via Digg: {body}"
+        return f"@{_escape_markdown_plain_text(handle)} via Digg: {body}"
     return f"via Digg: {body}"
 
 
@@ -3912,7 +3960,7 @@ def _render_top_comments(
         score = tc.get("score", "")
         vote_label = _vote_label_for(item.source)
         attribution = _comment_attribution(item.source, tc.get("author"))
-        url = tc.get("url") or cand.url or ""
+        url = _comment_link(item, tc, fallback=cand.url)
         url_part = f" — {url}" if url else ""
         vote_part = (
             f" ({score} {vote_label})"
