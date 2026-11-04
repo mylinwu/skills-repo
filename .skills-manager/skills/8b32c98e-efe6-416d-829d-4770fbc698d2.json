@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "8b32c98e-efe6-416d-829d-4770fbc698d2",
+  "path": "computer-repair-skill",
+  "path_key": "computer-repair-skill",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "88lin/computer-repair-skill/computer-repair-skill",
+    "subpath": "skills\\computer-repair-skill",
+    "branch": null
+  }
+}
