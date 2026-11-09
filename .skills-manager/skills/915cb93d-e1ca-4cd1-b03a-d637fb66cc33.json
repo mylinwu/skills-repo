@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "915cb93d-e1ca-4cd1-b03a-d637fb66cc33",
+  "path": "improve",
+  "path_key": "improve",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "shadcn/improve/improve",
+    "subpath": "skills\\improve",
+    "branch": null
+  }
+}
