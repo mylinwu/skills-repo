@@ -1,0 +1,7 @@
+interface:
+  display_name: "Source 3D Assets"
+  short_description: "Find models, HDRIs and textures with licenses"
+  default_prompt: "Use $threejs-assets to find a model for this scene."
+
+policy:
+  allow_implicit_invocation: true

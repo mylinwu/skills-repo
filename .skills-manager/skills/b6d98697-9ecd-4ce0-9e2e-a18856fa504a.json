@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "b6d98697-9ecd-4ce0-9e2e-a18856fa504a",
+  "path": "game-artist",
+  "path_key": "game-artist",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "ikatechis/claude-agentic-mastery/game-artist",
+    "subpath": ".claude\\skills\\game-artist",
+    "branch": null
+  }
+}

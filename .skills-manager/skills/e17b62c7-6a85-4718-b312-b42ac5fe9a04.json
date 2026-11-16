@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "e17b62c7-6a85-4718-b312-b42ac5fe9a04",
+  "path": "threejs-assets",
+  "path_key": "threejs-assets",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "emiliodominguez/threejs-skills/threejs-assets",
+    "subpath": "skills\\threejs-assets",
+    "branch": null
+  }
+}
