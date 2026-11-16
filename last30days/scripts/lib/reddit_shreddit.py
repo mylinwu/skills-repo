@@ -21,7 +21,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from . import http
+from . import reddit_arctic
 from . import reddit_enrich
+from . import snippet
 
 # Up to N posts enriched per subquery, by depth. Raised from 3/5/8 once the
 # per-command memo (http.reddit_keyless_get_text) collapsed repeat shreddit
@@ -174,7 +176,7 @@ def parse_comments(html_text: str, limit: int = MAX_COMMENTS) -> List[Dict[str, 
             "score": score,
             "author": author,
             "body": body[:300],
-            "excerpt": body[:200],
+            "excerpt": snippet.cut_quote(body),
             "permalink": permalink,
             "date": _iso_to_date(_attr(tag, "created")),
             "url": f"https://reddit.com{permalink}" if permalink else "",
@@ -192,12 +194,14 @@ def _total_comments(html_text: str) -> Optional[int]:
 def fetch_comments(
     post_url: str,
     timeout: int = SVC_TIMEOUT,
+    deadline: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Fetch and parse top comments for a Reddit post via the shreddit endpoint.
 
     Args:
         post_url: Reddit thread URL (…/r/{sub}/comments/{id}/…)
         timeout: HTTP timeout in seconds
+        deadline: absolute ``time.monotonic()`` bound; applies only to the archive fallback
 
     Returns:
         Dict with 'top_comments' (list, reddit_enrich shape), 'comment_insights'
@@ -210,10 +214,22 @@ def fetch_comments(
     sub, post_id = ref
 
     html_text = http.reddit_keyless_get_text(_svc_url(sub, post_id), timeout=timeout, accept="text/html")
-    if not html_text:
-        return {"top_comments": [], "comment_insights": [], "num_comments": None}
+    comments = parse_comments(html_text, limit=MAX_COMMENTS) if html_text else []
+    total = _total_comments(html_text) if html_text else None
+    if not comments:
+        # The shreddit comment partials 403 on some hosts (datacenter egress).
+        # Fall back to the arctic-shift archive, which serves scored comments
+        # from any IP keyless (ranked by score client-side).
+        try:
+            comments = reddit_arctic.fetch_post_comments(
+                post_id, limit=MAX_COMMENTS, skip_author=_is_bot_author,
+                deadline=deadline)
+        except Exception as exc:  # the fallback must never break enrichment
+            _log(f"arctic comment fallback failed: {exc}")
+            comments = []
+    if not comments:
+        return {"top_comments": [], "comment_insights": [], "num_comments": total}
 
-    comments = parse_comments(html_text, limit=MAX_COMMENTS)
     insights = reddit_enrich.extract_comment_insights(comments)
     return {
         "top_comments": [
@@ -227,5 +243,5 @@ def fetch_comments(
             for c in comments
         ],
         "comment_insights": insights,
-        "num_comments": _total_comments(html_text),
+        "num_comments": total,
     }

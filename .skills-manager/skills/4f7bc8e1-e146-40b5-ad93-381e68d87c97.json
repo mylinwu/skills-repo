@@ -8,7 +8,7 @@
   "source": {
     "type": "skillssh",
     "ref": "alirezarezvani/claude-skills/self-improving-agent",
-    "subpath": ".gemini\\skills\\self-improving-agent",
+    "subpath": "engineering-team\\self-improving-agent\\skills\\self-improving-agent",
     "branch": null
   }
 }

@@ -116,7 +116,6 @@ JS = r"""
   return pages.map((pg) => {
     const pb = pg.getBoundingClientRect();
     const out = [];
-    let svgSeq = 0;
 
     // 一组相邻节点 → 一个文本元素。own=true 表示这是「块级子元素之间的裸文字」，
     // 位置要用文字自己的包围盒，不能套容器的 x/w（否则会盖到旁边的图标上）。
@@ -165,7 +164,8 @@ JS = r"""
         return;
       }
       if (tag === 'svg' || tag === 'canvas') {
-        out.push({...base, kind: 'svg', seq: svgSeq++, tagName: tag});
+        const seq = [...pg.querySelectorAll(tag)].indexOf(el);
+        out.push({...base, kind: 'svg', seq, tagName: tag});
         return;
       }
 
@@ -509,8 +509,9 @@ def verify_text(refs, pptx_path):
     import difflib
     prs = Presentation(pptx_path)
     res = []
-    for ref, slide in zip(refs, prs.slides):
-        got = _norm("".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame))
+    for i, ref in enumerate(refs):
+        slide = prs.slides[i] if i < len(prs.slides) else None
+        got = _norm("".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame)) if slide is not None else ""
         want = _norm(ref)
         sm = difflib.SequenceMatcher(None, want, got, autojunk=False)
         res.append([want[i1:i2] for tag, i1, i2, _, _ in sm.get_opcodes()

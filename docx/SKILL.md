@@ -1,7 +1,7 @@
 ---
 name: docx
 description: "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files) or Word templates (.dotx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', '.dotx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx or .dotx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."
-license: Proprietary. LICENSE.txt has complete terms
+license: Complete terms in LICENSE.txt
 ---
 
 # DOCX creation, editing, and analysis
@@ -28,6 +28,7 @@ A `.docx` is a ZIP archive of XML files. Choose your approach by task:
 - **`ImageRun` requires `type:`** (`"png"`, `"jpg"`, …).
 - **`PageBreak` must be inside a `Paragraph`.**
 - **Never use `\n`** — use separate `Paragraph` elements.
+- **Headings:** style every level you use (`title`, `heading1`, `heading2`…) in `styles.default`: `heading1: { run: { font: "Arial", size: 32, bold: true }, paragraph: { spacing: { before: 240, after: 120 }, keepNext: true } }`. Every level needs its own font (even with a document default), `before` and `after` (even if 0) and `keepNext`: the built-in styles set none of them.
 - **TOC:** headings must use built-in `HeadingLevel.*`; custom heading styles need `outlineLevel` set or they won't appear.
 - **Don't use a table as a horizontal rule** — use a paragraph bottom border instead.
 - **Dot-leader / right-aligned-on-same-line:** use `PositionalTab` (`alignment: PositionalTabAlignment.RIGHT`, `leader: PositionalTabLeader.DOT`) inside a `TextRun`, not literal `.` or space padding.
@@ -37,6 +38,7 @@ A `.docx` is a ZIP archive of XML files. Choose your approach by task:
 After writing a `.docx`, render it and look at it:
 
 ```bash
+zip -d output.docx '*/' >/dev/null || true   # drop the ZIP's folder entries: Word has refused a file that has them when opened through a cloud co-editing service
 python scripts/office/soffice.py --headless --convert-to pdf output.docx
 pdftoppm -jpeg -r 100 output.pdf page
 ls page-*.jpg   # then Read the images
@@ -53,7 +55,7 @@ unzip -q doc.docx -d unpacked/
 find unpacked -type l -delete   # strip symlink entries — docx from external parties is untrusted
 python scripts/merge_runs.py unpacked/   # coalesce fragmented runs so text is findable
 # edit unpacked/word/document.xml in place — do NOT reformat or pretty-print
-(cd unpacked && rm -f ../out.docx && zip -Xr ../out.docx .)
+(cd unpacked && rm -f ../out.docx && zip -XrD ../out.docx .)
 python scripts/office/validate.py out.docx --original doc.docx   # XSD checks; --auto-repair fixes common issues
 # redlining? add --author "<the name you redlined under>" to check every edit is tracked
 ```

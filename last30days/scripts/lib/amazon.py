@@ -2,10 +2,10 @@
 
 Two-stage source, following the digg discover-then-enrich shape:
 
-1. **Discovery** -- one ``amazon_product_search`` per run turns a
+1. **Discovery** -- one product search per run turns a
    model-supplied product keyword into product records carrying live
    aggregate stats (rating, rating count, price). Cheap and fast.
-2. **Enrichment** -- ``amazon_product_reviews`` pulls a capped sample of
+2. **Enrichment** -- review pulls fetch a capped sample of
    written reviews for the top few surviving products, in parallel, under
    a lane deadline. Reviews ride on their product item as metadata
    comments and feed community-voice weaving.
@@ -38,8 +38,9 @@ from . import brightdata, log
 from .relevance import token_overlap_relevance
 
 
-SEARCH_PIPELINE = "amazon_product_search"
-REVIEWS_PIPELINE = "amazon_product_reviews"
+# Bright Data scraper IDs: "Amazon products search" and "Amazon Reviews".
+SEARCH_DATASET = "gd_lwdb4vjm1ehb499uxs"
+REVIEWS_DATASET = "gd_le8e811kzy4ggddlq"
 
 DEFAULT_DOMAIN = "https://www.amazon.com"
 
@@ -61,13 +62,16 @@ DEPTH_CONFIG = {
 }
 
 SEARCH_TIMEOUT = 90
-REVIEW_TIMEOUT = 180
+REVIEW_TIMEOUT = 60
 
 # Wall-clock ceiling for the whole parallel review lane. Pulls that miss it
 # are abandoned, and their products degrade to `quiet` rather than
-# disappearing (a slow SKU is real and unrelated to the cap: one live pull
-# took 115s).
-LANE_DEADLINE = 180
+# disappearing. One minute, down from three: a healthy pull answers in about
+# 20s, and when the provider's review scraper does not answer at all (live
+# 2026-11-10: no records after 180s while the product search took 16s) the
+# run should lose a minute to it, not three. A slow SKU (one live pull took
+# 115s) now reads `quiet` too.
+LANE_DEADLINE = 60
 
 # The engine's foreground contract. The lane deadline is clamped against
 # whatever remains of it, minus room to render.
@@ -76,9 +80,24 @@ RENDER_MARGIN = 20
 
 # Minimum useful budget for the review lane. Below this threshold, Bright
 # Data pulls reliably time out (cli_timeout = max(5, timeout-10), so budget
-# 11s → CLI timeout 1s). Crumbs are a skip, not a short timeout: firing
-# doomed pulls still spends 3 credits with no reviews returned.
-MIN_USEFUL_REVIEW_BUDGET = 90
+# 11s → CLI timeout 1s; 45s leaves the CLI 35s against a ~20s healthy pull).
+# Crumbs are a skip, not a short timeout: firing doomed pulls still spends 3
+# credits with no reviews returned.
+MIN_USEFUL_REVIEW_BUDGET = 45
+
+# Footer and Partial Coverage wording for a review lane whose every pull
+# failed or missed the deadline: the products and their search stats still
+# stand, and the reader is told why there are no review excerpts.
+REVIEWS_UNAVAILABLE_NOTE = "written reviews unavailable from the provider this run"
+_REVIEWS_UNAVAILABLE_STATUSES = ("review lane timed out", "review pulls failed")
+
+
+def outcome_detail(status: str) -> str:
+    """The source-outcome detail for an ``enrich_with_reviews`` status."""
+    if status in _REVIEWS_UNAVAILABLE_STATUSES:
+        return f"{REVIEWS_UNAVAILABLE_NOTE} ({status})"
+    return status
+
 
 # Minimum dated reviews inside the window before a drift arrow is honest.
 # Live census: a 50-cap pull returned 31 records of which only 5 were
@@ -267,16 +286,15 @@ def search_products(
     query = (keyword or "").strip()
     if not query:
         return {"records": []}
-    # A leading dash would be parsed as a CLI option rather than a search
-    # term. The keyword is model-supplied and can be influenced by
-    # pre-research over untrusted web content, so reject rather than
-    # sanitize -- a keyword starting with '-' is never a real product.
+    # Model-supplied and shaped by untrusted pre-research. --input JSON already
+    # keeps it out of argv; this is defense in depth, and '-x' is never a product.
     if query.startswith("-"):
         _log(f"rejecting option-shaped keyword: {query!r}")
         return {"records": [], "error": "amazon keyword may not begin with '-'"}
     _log(f"search '{query}' on {domain}")
     response = brightdata.run_pipeline(
-        SEARCH_PIPELINE, [query, domain or DEFAULT_DOMAIN],
+        SEARCH_DATASET,
+        {"keyword": query, "url": domain or DEFAULT_DOMAIN, "pages_to_search": 1},
         timeout=timeout, config=config,
     )
     if response.get("error"):
@@ -473,7 +491,7 @@ def fetch_reviews(
     if not product_url:
         return {"records": []}
     return brightdata.run_pipeline(
-        REVIEWS_PIPELINE, [product_url, str(max_reviews)],
+        REVIEWS_DATASET, {"url": product_url, "max_reviews": int(max_reviews)},
         timeout=timeout, config=config,
     )
 
@@ -567,7 +585,11 @@ def enrich_with_reviews(
     Returns (enriched_products, status_detail). status_detail is None when
     enrichment succeeded normally, or a string describing a degraded outcome:
     - ``"review lane skipped (budget 0s)"`` -- crumb budget, lane did not run
-    - ``"review lane timed out"`` -- all pulls dropped by the deadline
+    - ``"review lane timed out"`` -- no pull completed and the deadline dropped some
+    - ``"review pulls failed"`` -- no pull completed; each one errored
+
+    Every product is stamped ``reviews_attempted`` once pulls were fired, so
+    finalize does not fire (and wait on) the same lane a second time.
     """
     enriched = [dict(p) for p in products]
     pull_count = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["default"])
@@ -587,6 +609,8 @@ def enrich_with_reviews(
         return enriched, None
 
     by_asin = {p["asin"]: p for p in enriched}
+    for product in enriched:
+        product["reviews_attempted"] = True
     pull = fetcher or (
         lambda url: fetch_reviews(
             url, max_reviews=max_reviews, config=config,
@@ -634,10 +658,11 @@ def enrich_with_reviews(
 
     _log(f"review lane finished in {time.monotonic() - started:.0f}s")
 
-    # Report degraded outcome if all pulls dropped (none completed)
+    # Report a degraded outcome when no pull completed: dropped by the
+    # deadline, or each one came back as an error.
     status_detail = None
-    if completed_count == 0 and dropped_count > 0:
-        status_detail = "review lane timed out"
+    if completed_count == 0:
+        status_detail = "review lane timed out" if dropped_count else "review pulls failed"
 
     return enriched, status_detail
 
@@ -667,7 +692,7 @@ def enrich_source_items(
             continue
         metadata = getattr(item, "metadata", None) or {}
         asin = str(metadata.get("asin") or "").strip()
-        if not asin or metadata.get("top_comments"):
+        if not asin or metadata.get("top_comments") or metadata.get("reviews_attempted"):
             continue
         products.append(
             {

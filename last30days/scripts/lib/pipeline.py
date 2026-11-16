@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 import math
 import queue
 import re
@@ -26,6 +26,7 @@ from . import (
     bird_x,
     bluesky,
     brightdata,
+    company_resolve,
     corpus,
     dates,
     dedupe,
@@ -44,6 +45,7 @@ from . import (
     http,
     instagram,
     jobs,
+    jobs_digest,
     linkedin,
     library,
     library_index,
@@ -58,8 +60,10 @@ from . import (
     providers,
     query,
     reddit,
+    reddit_keyless,
     reddit_listing,
     reddit_public,
+    reddit_search,
     relevance,
     rerank,
     schema,
@@ -83,6 +87,7 @@ from . import (
     youtube_yt,
 )
 from .cluster import cluster_candidates
+from .cluster_diversity import diversify_clusters
 from . import fusion
 from . import render
 from .fusion import collapse_duplicate_urls, source_item_key, weighted_rrf
@@ -92,10 +97,14 @@ _DISCOVERY_GENERIC_DOMAIN_TERMS = {
     "ai", "artificial", "intelligence", "tech", "technology", "trending", "trend",
 }
 
+# ``digg_stream_limit`` is how many Digg stories one search keeps once the
+# Digg bar has sorted them. It is higher than ``per_stream_limit`` because a
+# Digg search now returns the highest-scored stories as well as the most
+# relevant ones.
 DEPTH_SETTINGS = {
-    "quick": {"per_stream_limit": 6, "pool_limit": 15, "rerank_limit": 12},
-    "default": {"per_stream_limit": 12, "pool_limit": 40, "rerank_limit": 40},
-    "deep": {"per_stream_limit": 20, "pool_limit": 60, "rerank_limit": 60},
+    "quick": {"per_stream_limit": 6, "digg_stream_limit": 6, "pool_limit": 15, "rerank_limit": 12},
+    "default": {"per_stream_limit": 12, "digg_stream_limit": 20, "pool_limit": 40, "rerank_limit": 40},
+    "deep": {"per_stream_limit": 20, "digg_stream_limit": 30, "pool_limit": 60, "rerank_limit": 60},
 }
 
 SEARCH_ALIAS = {
@@ -147,7 +156,20 @@ STREAM_ARTIFACT_LIFT_KEYS: tuple[str, ...] = ("meta_ads_page", "meta_ads_tally")
 # Worst case per stream is one timeout ceiling (+ one inline 5xx retry in the
 # main fan-out, itself bounded by the lane's own timeouts); no new config knobs.
 STREAM_FUTURE_TIMEOUT_SECONDS = 180.0
+# A job board lists the roles open today, so it cannot answer a window that
+# ended in the past.
+JOBS_PAST_WINDOW_SKIP = "skipped: a job board shows the roles open today, not those of a past window"
 DISCOVERY_FUTURE_TIMEOUT_SECONDS = 60.0
+# The keyless Reddit lane stops this long before the stream wait ends, which
+# leaves time to return, normalize and score the threads it found.
+REDDIT_LANE_RETURN_MARGIN_SECONDS = 20.0
+# With a ScrapeCreators key the free lane stops this much earlier still, so a
+# backfill of a thin or timed-out free result gets a turn inside the same wait.
+REDDIT_SC_BACKFILL_RESERVE_SECONDS = 45.0
+# A backfill is not started with less than this left, and is abandoned this
+# long before the stream wait ends so the free threads are still returned.
+REDDIT_SC_BACKFILL_MIN_SECONDS = 8.0
+REDDIT_SC_BACKFILL_RETURN_MARGIN_SECONDS = 5.0
 THIN_RETRY_FUTURE_TIMEOUT_SECONDS = 120.0
 # One X source, ordered backends: grok (up to 240s/call) + xai (90-180s) would
 # stack sequentially inside one unbounded future under MCP's kill. The chain
@@ -218,15 +240,7 @@ def _lift_stream_artifacts(bundle) -> None:
                 bundle.artifacts[key] = value
 
 
-_FAILURE_SPECIFICITY = {
-    health.AUTH_FAILED: 0,
-    health.PAYMENT_REQUIRED: 1,
-    health.RATE_LIMITED: 2,
-    health.SCHEMA_DRIFT: 3,
-    health.TIMEOUT: 4,
-    health.UNREACHABLE: 5,
-    health.ERROR: 6,
-}
+_FAILURE_SPECIFICITY = health.FAILURE_SPECIFICITY
 
 
 @dataclass
@@ -269,7 +283,7 @@ def _resolve_depth_settings(depth: str, config: dict[str, Any]) -> dict[str, int
     Returns a copy so the module-level DEPTH_SETTINGS is never mutated. Overrides
     are set directly (not max()) so callers can also lower a cap. `--max-results`
     raises the final ranked pool (pool_limit/rerank_limit); `--max-per-source`
-    raises the per-stream truncation applied before pooling. The per-source fetch
+    raises the per-stream truncation applied before pooling, Digg's included. The per-source fetch
     cap (`--max-source-fetches`) is applied separately at the fetch site.
     """
     settings = dict(DEPTH_SETTINGS[depth])
@@ -278,6 +292,7 @@ def _resolve_depth_settings(depth: str, config: dict[str, Any]) -> dict[str, int
     max_per_source = config.get("_max_per_source")
     if max_per_source is not None:
         settings["per_stream_limit"] = int(max_per_source)
+        settings["digg_stream_limit"] = int(max_per_source)
     max_results = config.get("_max_results")
     if max_results is not None:
         settings["pool_limit"] = int(max_results)
@@ -340,6 +355,10 @@ def normalize_requested_sources(sources: list[str] | None) -> list[str] | None:
         if key not in normalized:
             normalized.append(key)
     return normalized
+
+
+class NoRequestedSourceAvailable(RuntimeError):
+    """None of the sources the user asked for with --search is configured."""
 
 
 def available_sources(
@@ -672,9 +691,15 @@ def _fetch_discovery_source(
         errors = result.get("errors") or []
         return items, "; ".join(errors) or None
     if source == "digg":
-        result = digg.search_digg(plan.domain, from_date, to_date, depth=depth)
-        items = digg.parse_digg_response(result, query=plan.domain)
-        # Digg's AI and Tech sections are a broad listing, so keep only domain-bearing
+        if plan.domain.strip():
+            result = digg.search_digg(plan.domain, from_date, to_date, depth=depth)
+            items = digg.parse_digg_response(result, query=plan.domain, from_date=from_date)
+        else:
+            # Global trending has nothing to search for: Digg's own top
+            # stories across every topic are its "what is hot" listing.
+            result = digg.top_stories(depth=depth)
+            items = digg.parse_top_response(result, from_date=from_date)
+        # Digg is a broad listing, so keep only domain-bearing
         # clusters when scoped; global trending keeps the whole feed.
         if keyword_gate:
             items = [
@@ -2097,6 +2122,9 @@ def diagnose(
         "has_github": bool(config.get("GITHUB_TOKEN") or which("gh")),
         "brightdata_installed": brightdata_status["brightdata_installed"],
         "brightdata_authenticated": brightdata_status["brightdata_authenticated"],
+        # Fresh browser session or a cached company record: the host resolves
+        # a --trustpilot-domain only then. Local reads; never opens a browser.
+        "trustpilot_can_run": trustpilot.can_run_now(config)["can_run"],
         # safe=True (doctor/--diagnose/--preflight) must stay network-free:
         # answer X availability from local evidence only. x_pending is
         # precomputed by diagnose() to avoid double evaluation.
@@ -2261,6 +2289,7 @@ def run(
     # overlaps other sources instead of waiting for them all to finish.
     run_started = time.monotonic()
     from_date, to_date = dates.get_date_range(lookback_days, as_of_date=as_of_date)
+    jobs_past_window = to_date < dates.get_date_range(0)[1]
     resolved_corpus_dirs = corpus.resolve_directories(
         corpus_dirs or config.get("_CORPUS_DIRS"),
         config.get("LAST30DAYS_CORPUS_DIRS"),
@@ -2346,12 +2375,20 @@ def run(
         or (not requested_sources and auto_company_jobs)
     ) and "jobs" not in available:
         available.append("jobs")
+    # A host plan about a company gets the jobs lane whether or not the plan
+    # names it: the lane is free and bounded, and a host that forgets one
+    # word must not cost the run a working board. Quick runs keep the
+    # sanitizer's two-source budget, as for the installed lanes below.
+    company_signal = str(config.get("_company_signal") or "")
     if (
         host_plan
         and not requested_sources
         and "jobs" not in available
         and "jobs" not in excluded_sources
-        and _external_plan_names_source(external_plan, "jobs")
+        and (
+            _external_plan_names_source(external_plan, "jobs")
+            or (company_signal and depth != "quick")
+        )
     ):
         available.append("jobs")
     if hiring_signals_mode:
@@ -2361,6 +2398,12 @@ def run(
             available = ["jobs"]
     available = [source for source in available if source not in excluded_sources]
     if not available:
+        if requested_sources:
+            raise NoRequestedSourceAvailable(
+                "None of the sources in --search can run here: "
+                + ", ".join(requested_sources)
+                + ". Run `last30days.py doctor` to see what each one needs."
+            )
         raise RuntimeError("No sources are available for this run.")
 
     planner_requested_sources = (
@@ -2387,9 +2430,18 @@ def run(
             external_plan, topic, available, planner_requested_sources, depth,
             honor_plan_sources=True,
         )
-        # Quick runs keep the sanitizer's two-source budget.
-        if depth != "quick":
-            _ensure_unplanned_lanes_in_host_plan(plan, available)
+        # Quick runs keep the sanitizer's two-source budget, plus any paid
+        # lane this run asked for.
+        _ensure_unplanned_lanes_in_host_plan(
+            plan, available,
+            asked=_paid_lanes_asked_for(planner_requested_sources, config),
+            installed=depth != "quick",
+            config=config,
+            requested_sources=planner_requested_sources,
+            trustpilot_domain=trustpilot_domain,
+        )
+        if depth != "quick" and not hiring_signals_mode:
+            _ensure_company_jobs_in_host_plan(plan, available, company_signal)
         plan_source = "external"
     else:
         _check_research(config)
@@ -2474,6 +2526,11 @@ def run(
 
     bundle = schema.RetrievalBundle(artifacts={"grounding": []})
     deferred_retryable_failures: dict[str, dict[str, Any]] = {}
+    out_of_time_sources: set[str] = set()
+    # Searches an enablement plan runs for the capability alone. Their Digg
+    # stories are not expected to name the run topic.
+    capability_searches = fusion.capability_labels(plan)
+    digg_bar_dropped = False
     if envelope is not None:
         # The footer names the X provenance (render._render_stats).
         bundle.artifacts["x_provenance"] = envelope.provenance
@@ -2536,11 +2593,12 @@ def run(
     # the LAW 7 degraded-run and Step 0.55 pre-research banners do not apply -
     # they would contradict the documented jobs-scoped flow. Suppress them.
     bundle.artifacts["hiring_signals_mode"] = hiring_signals_mode
-    # Record the resolved Amazon keyword whenever the lane is active, so the
+    # Record the resolved Amazon keyword whenever the lane is planned, so the
     # footer can name it on an empty result. A search that matched nothing
     # still spent a credit, and the fix is almost always the keyword -- a
-    # suppressed line means nobody ever learns it was wrong.
-    if "amazon" in (available or []):
+    # suppressed line means nobody ever learns it was wrong. A lane that is
+    # available but in no subquery never searched, so it names no keyword.
+    if any("amazon" in subquery.sources for subquery in plan.subqueries):
         bundle.artifacts["amazon_query"] = (
             str(config.get("_amazon_query") or "").strip() or topic
         )
@@ -2671,6 +2729,10 @@ def run(
         if source in available and source != "corpus"
     )
     max_workers = _inner_max_workers(stream_count, internal_subrun=internal_subrun)
+    # One holder, shared by every copy of the config made below: the jobs
+    # lane's time budget for this topic (see ``_jobs_lane_budget``).
+    # It goes into a copy, so the caller's config is left as it was.
+    config = {**config, "_jobs_lane": {}}
     stream_config = dict(config)
     stream_config["_research_deadline"] = _research_deadline(config, STREAM_FUTURE_TIMEOUT_SECONDS)
     with _abandoning_executor(max_workers=max_workers) as executor:
@@ -2682,6 +2744,14 @@ def run(
                     continue
                 # Skip GitHub keyword search if person-mode already ran
                 if source == "github" and (_github_person_done or _github_custom_done):
+                    continue
+                if source == "jobs" and jobs_past_window:
+                    bundle.source_status["jobs"] = schema.SourceOutcome(
+                        source="jobs",
+                        state=schema.NO_RESULTS,
+                        attempted=False,
+                        detail=JOBS_PAST_WINDOW_SKIP,
+                    )
                     continue
                 # Enforce per-source fetch cap. A CLI override (issue #716) raises
                 # the cap for capped sources so every X subquery in a multi-angle
@@ -2819,6 +2889,17 @@ def run(
                     state, attempted = _classify_source_failure(exc)
                     bundle.record_failure(source, state, str(exc), attempted=attempted)
                     continue
+            if isinstance(artifact, dict) and artifact.get("_source_skipped"):
+                # The lane chose not to run (jobs' past-window skip is the
+                # precedent): not attempted, so it is no failure, no degraded
+                # source and no warning.
+                bundle.source_status[source] = schema.SourceOutcome(
+                    source=source,
+                    state=schema.NO_RESULTS,
+                    attempted=False,
+                    detail=artifact["_source_skipped"],
+                )
+                continue
             outcome_note = None
             if isinstance(artifact, dict) and artifact.get("_source_outcome"):
                 artifact = dict(artifact)
@@ -2827,6 +2908,7 @@ def run(
                     source == "youtube"
                     and not raw_items
                     and _retryable_youtube_outcome(outcome_note)
+                    and not artifact.get("_source_out_of_time")
                 ):
                     deferred_retryable_failures.setdefault(source, outcome_note)
                 else:
@@ -2836,6 +2918,10 @@ def run(
                         outcome_note["detail"],
                         attempted=outcome_note.get("attempted", True),
                     )
+                # A lane that already ran out of time would only run out
+                # again in the thin-results retry or the transcript backfill.
+                if artifact.pop("_source_out_of_time", False):
+                    out_of_time_sources.add(source)
             if isinstance(artifact, dict) and artifact.get("_source_outcome_detail"):
                 artifact = dict(artifact)
                 detail_rate_limited = _detail_rate_limits_source(source, artifact)
@@ -2855,6 +2941,7 @@ def run(
                 )
             if isinstance(artifact, dict):
                 artifact.pop("_x_backup_not_rate_limited", None)
+            bar_notes: list[str] = []
             normalized = _normalize_score_dedupe(
                 source, raw_items, from_date, to_date,
                 freshness_mode=plan.freshness_mode,
@@ -2864,6 +2951,10 @@ def run(
                 # X defers its relevance floor until resolved_handles exists.
                 # Everything else prunes here as before.
                 defer_relevance_prune=(source == "x"),
+                before_dedupe=_digg_bar_before_dedupe(
+                    settings, topic, subquery.label, bar_notes,
+                    judged=subquery.label not in capability_searches,
+                ) if source == "digg" else None,
             )
             # Jobs is exempt from per_stream_limit: a careers board is a complete
             # snapshot of open roles, and truncating it to the default 12 drops
@@ -2871,7 +2962,17 @@ def run(
             # A host-fetched envelope serves every topic row to the first X
             # stream, so that one stream carries what the backend's X streams
             # together would have (per_stream_limit x the X fetch cap).
-            if source != "jobs":
+            if source == "digg":
+                # The bar already ran before de-duplication; this pass only
+                # applies the limits to what is left.
+                normalized, _ = _apply_digg_bar(
+                    normalized, settings, topic, subquery.label,
+                    judged=subquery.label not in capability_searches,
+                )
+                for bar_note in bar_notes:
+                    digg_bar_dropped = True
+                    bundle.record_detail(source, bar_note)
+            elif source != "jobs":
                 stream_limit = settings["per_stream_limit"]
                 host_fetched_x = source == "x" and config.get("_x_envelope") is not None
                 if host_fetched_x:
@@ -2894,8 +2995,34 @@ def run(
                             attempted=deferred_outcome.get("attempted", True),
                         )
             bundle.add_items(subquery.label, source, normalized)
+            if _is_jobs_board(source, artifact):
+                # The board's own counts and digest are read by name, and stay
+                # whatever happens to the board's items below.
+                bundle.artifacts["jobs"] = _jobs_board_artifact(artifact)
+                bundle.jobs_board_rows = list(raw_items)
+                artifact = {key: value for key, value in artifact.items() if key != "digest"}
+            elif (
+                source == "jobs" and isinstance(artifact, dict)
+                and artifact.get("job_site_unreadable") and "jobs" not in bundle.artifacts
+            ):
+                # The company's job site is known and cannot be read: the
+                # footer says so rather than printing nothing.
+                bundle.artifacts["jobs_site_unreadable"] = str(artifact["job_site_unreadable"])
+                if artifact.get("job_site_unreadable_reason"):
+                    bundle.artifacts["jobs_site_unreadable_reason"] = str(
+                        artifact["job_site_unreadable_reason"]
+                    )
             if artifact:
                 bundle.artifacts.setdefault("grounding", []).append(artifact)
+
+    # Sources of the prominent Digg stories, fetched once per run and before the
+    # supplemental searches add their own calls. The quotes land on the
+    # stories now; the match keys mark confirmed candidates after fusion.
+    _check_research(config)
+    digg_sources_spent = _DiggSourcesSpent()
+    digg_story_by_key = _digg_story_sources(
+        bundle, topic=topic, depth=depth, config=config, spent=digg_sources_spent,
+    )
 
     # Phase 2: supplemental entity-based searches
     _check_research(config)
@@ -2922,6 +3049,12 @@ def run(
     _github_skip_retry = {"corpus"}
     if _github_person_done or _github_custom_done:
         _github_skip_retry.add("github")
+    if jobs_past_window:
+        _github_skip_retry.add("jobs")
+    if digg_bar_dropped and not bundle.items_by_source.get("digg"):
+        # Digg returned stories and none named the topic. It has shown it
+        # does not cover this topic, so a second search would only repeat that.
+        _github_skip_retry.add("digg")
     pre_retry_counts = {
         source: len(bundle.items_by_source.get(source, []))
         for source in deferred_retryable_failures
@@ -2947,7 +3080,14 @@ def run(
         first_party_handles=explicit_first_party,
         first_party_by_source=creator_first_party,
         run_started=run_started,
+        out_of_time_sources=out_of_time_sources,
     )
+    # Digg stories the retry found get their sources too, out of whatever
+    # story budget and time the first pass left. Without this they carry no
+    # quotes and cannot confirm other results.
+    digg.merge_stories(digg_story_by_key, _digg_story_sources(
+        bundle, topic=topic, depth=depth, config=config, spent=digg_sources_spent,
+    ))
     for source, outcome in deferred_retryable_failures.items():
         if (
             source in bundle.errors_by_source
@@ -3047,8 +3187,18 @@ def run(
     # source_status counts describe the same post-floor evidence set fusion sees.
     items_by_source = _finalize_items_by_source(
         bundle.items_by_source, topic=topic, config=config, depth=depth, mock=mock,
-        elapsed=time.monotonic() - run_started,
+        elapsed=time.monotonic() - run_started, out_of_time=out_of_time_sources,
     )
+    # Fusion gates on identity too, but the footer counts and Top voices read
+    # this per-source view, so a namesake left here still reaches the report.
+    # Gated after enrichment so a backfilled transcript can supply the anchor.
+    items_by_source = {
+        source: [
+            item for item in items
+            if entity_extract.matches_person_identity(item, plan.person_identity_anchors, x_handle)
+        ]
+        for source, items in items_by_source.items()
+    }
     retained_markets = {
         source_item_key(item) for item in items_by_source.get("polymarket", [])
     }
@@ -3066,6 +3216,25 @@ def run(
         range_from=from_date,
         range_to=to_date,
         first_party_handles=resolved_handles,
+        primary_handle=x_handle,
+    )
+    # Only a Digg story that is certain to stay in the report may confirm
+    # another result: one the filters above kept, and that the subject prune
+    # after reranking cannot remove. The confirmation feeds the rerank score,
+    # so it has to be settled here, before that prune runs.
+    digg_prunable = {
+        item.url
+        for candidate in candidates
+        if not rerank.escapes_entity_miss_prune(candidate, topic=topic)
+        for item in candidate.source_items
+        if item.source == "digg"
+    }
+    digg.tag_confirmed_candidates(
+        candidates,
+        digg.surviving_stories(digg_story_by_key, [
+            item for item in items_by_source.get("digg", [])
+            if item.url not in digg_prunable
+        ]),
     )
     private_candidates = [
         candidate
@@ -3101,18 +3270,19 @@ def run(
         resolved_handles=resolved_handles,
         primary_handle=x_handle,
     )
+    reranked_public = ranked_public
     ranked_public = rerank.prune_fallback_entity_misses(ranked_public, topic=topic)
+    # The footer leaves these out of its totals; an item that merely has no
+    # candidate (author cap, pool size) is not among them and still counts.
+    rejected_items = rerank.rejected_item_keys(reranked_public, ranked_public)
+    if rejected_items:
+        bundle.artifacts[rerank.REJECTED_ITEMS_ARTIFACT] = rejected_items
     if hiring_summary:
         # The diagnostic source dump retains pruned jobs; hiring aggregation
         # needs their rejection identities after they leave the ranked pool.
-        retained_ids = {candidate.candidate_id for candidate in ranked_public}
-        hiring_summary["rejected_job_keys"] = sorted({
-            fusion.candidate_key(item)
-            for candidate in public_candidates
-            if candidate.candidate_id not in retained_ids
-            for item in candidate.source_items
-            if item.source == "jobs"
-        })
+        hiring_summary["rejected_job_keys"] = _rejected_job_keys(
+            public_candidates, ranked_public, bundle.artifacts.get("jobs"), topic,
+        )
     # Private corpus already cleared a body-aware retrieval floor; do not apply
     # the public title/snippet visibility gate (filenames often omit the head
     # token even when the document body matched).
@@ -3126,6 +3296,7 @@ def run(
             candidate.title,
         ),
     )
+    _add_ranked_roles_to_jobs_digest(bundle, ranked_candidates, hiring_summary)
     _check_research(config)
     rerank.score_fun(
         topic=topic,
@@ -3166,7 +3337,11 @@ def run(
             )
             http.fixture_source_record(star_request, collected_star_map)
 
-    clusters = cluster_candidates(ranked_candidates, plan)
+    # Reorder here, not in render, so chat numbering, the saved file and
+    # --drill N (report.clusters[N - 1]) agree on which cluster is which.
+    clusters = diversify_clusters(
+        cluster_candidates(ranked_candidates, plan), ranked_candidates, plan,
+    )
     warnings = _warnings(items_by_source, ranked_candidates, bundle.errors_by_source, degraded_by_source)
     # One-sided entity coverage is a reporting warning, not a source failure:
     # marking the source PARTIAL would trip LAST30DAYS_STRICT_EXIT on runs that
@@ -3494,6 +3669,59 @@ def _apply_reddit_stream_keepers(
     return kept[:limit]
 
 
+def _apply_digg_bar(
+    items: list[schema.SourceItem],
+    settings: Mapping[str, Any],
+    topic: str,
+    label: str,
+    *,
+    judged: bool = True,
+    capped: bool = True,
+) -> tuple[list[schema.SourceItem], str | None]:
+    """Cut one Digg search to the stories the Digg bar keeps, in its order.
+
+    Prominent stories lead by Digg Score, ordinary ones follow in the order
+    they ranked, and the stories that do not name the topic are removed. The
+    second value is a note saying how many were removed, or None.
+
+    ``judged=False`` is for a search that is deliberately not about the run
+    topic: its stories keep their order and none is removed. Clusters from
+    digg-pp-cli 2026.10.x are never judged and keep the shared limit.
+
+    ``capped=False`` applies the bar without the limits. It is the pass made
+    before near-duplicates are removed, so that a prominent story is the
+    copy kept and a story the bar drops cannot displace one it keeps.
+    """
+    result = digg.apply_bar(topic if judged else "", items)
+    stories = result.prominent + result.ordinary
+    if capped:
+        stories = stories[: settings["digg_stream_limit"]]
+    note = None
+    if result.dropped:
+        note = (
+            f"{len(result.dropped)} of {len(items) - len(result.legacy)} stories dropped "
+            f"for not naming the topic ({label} search)"
+        )
+        digg._log(note)
+    legacy = result.legacy[: settings["per_stream_limit"]] if capped else result.legacy
+    return stories + legacy, note
+
+
+def _digg_bar_before_dedupe(
+    settings: Mapping[str, Any], topic: str, label: str, notes: list[str], *, judged: bool = True,
+) -> Callable[[list[schema.SourceItem]], list[schema.SourceItem]]:
+    """The Digg bar as the ``before_dedupe`` step of ``_normalize_score_dedupe``.
+
+    Any note about dropped stories is appended to ``notes``.
+    """
+    def apply(items: list[schema.SourceItem]) -> list[schema.SourceItem]:
+        kept, note = _apply_digg_bar(items, settings, topic, label, judged=judged, capped=False)
+        if note:
+            notes.append(note)
+        return kept
+
+    return apply
+
 
 def _creator_first_party_by_source(
     tiktok_creators: Iterable[str] | None,
@@ -3570,8 +3798,15 @@ def _normalize_score_dedupe(
     first_party_handles: Iterable[str] | None = None,
     first_party_by_source: Mapping[str, Iterable[str]] | None = None,
     defer_relevance_prune: bool = False,
+    before_dedupe: Callable[[list[schema.SourceItem]], list[schema.SourceItem]] | None = None,
 ) -> list[schema.SourceItem]:
     """Normalize, annotate, prune, dedupe, and extract snippets for a batch of raw items.
+
+    ``before_dedupe`` filters and reorders the batch just before
+    near-duplicates are removed. De-duplication keeps the earlier of two
+    similar items, so a source that drops items by its own rule has to do it
+    first: otherwise an item it would drop can displace a similar one it
+    would keep.
 
     ``defer_relevance_prune`` skips the relevance floor here so the caller can
     apply it once the run has resolved who the topic's subject is. Pruning X
@@ -3613,13 +3848,38 @@ def _normalize_score_dedupe(
             # case where the handle never appears in the topic at all
             # ("Peter Steinberger" -> @steipete).
             floor_handles |= _batch_subject_handles(raw_items)
-        pre_prune_count = len(normalized)
-        normalized = signals.prune_low_relevance(
-            normalized,
-            first_party_handles=floor_handles,
-            first_party_by_source=first_party_by_source,
-        )
+        # A Digg story with a UUID is judged by the Digg bar at the stream
+        # cut, not by this floor: the floor scores against the planner's
+        # ranking query, whose filler words push a story that names the topic
+        # in its title under it. Clusters from digg-pp-cli 2026.10.x have no
+        # UUID and stay under the floor.
+        bar_judged = [
+            item for item in normalized
+            if source == "digg" and item.metadata.get(digg.STORY_ID_KEY)
+        ]
+        if bar_judged:
+            exempt = {id(item) for item in bar_judged}
+            floor_judged = [item for item in normalized if id(item) not in exempt]
+            kept = exempt | {
+                id(item)
+                for item in signals.prune_low_relevance(
+                    floor_judged,
+                    first_party_handles=floor_handles,
+                    first_party_by_source=first_party_by_source,
+                )
+            }
+            pre_prune_count = len(normalized)
+            normalized = [item for item in normalized if id(item) in kept]
+        else:
+            pre_prune_count = len(normalized)
+            normalized = signals.prune_low_relevance(
+                normalized,
+                first_party_handles=floor_handles,
+                first_party_by_source=first_party_by_source,
+            )
         _log_prune_drop(source, pre_prune_count, len(normalized))
+    if before_dedupe is not None:
+        normalized = before_dedupe(normalized)
     normalized = dedupe.dedupe_items(normalized)
     for item in normalized:
         item.snippet = snippet.extract_best_snippet(item, prepared_query)
@@ -3633,23 +3893,36 @@ def _finalize_items_by_source(
     depth: str = "default",
     mock: bool = False,
     elapsed: float = 0.0,
+    out_of_time: set[str] | None = None,
 ) -> dict[str, list[schema.SourceItem]]:
     finalized = {}
     for source, items in items_by_source_raw.items():
         _check_research(config or {})
         items = sorted(items, key=lambda item: item.local_rank_score or 0.0, reverse=True)
+        if source == "digg":
+            # De-duplication keeps the earlier of two similar stories. Two
+            # searches can return the same event as a prominent story and as
+            # a smaller one, so prominent stories go first here and the copy
+            # kept is the one that carries the fetched quotes and can
+            # confirm other results.
+            prominent = digg.apply_bar(topic, items).prominent
+            leading = {id(item) for item in prominent}
+            items = prominent + [item for item in items if id(item) not in leading]
         # Same thread from two subquery streams: fold the enriched copy into
         # the first before the text-similarity dedupe, which would otherwise
         # keep whichever copy ranked higher and drop its comments.
         items = collapse_duplicate_urls(items)
         items = dedupe.dedupe_items(items)
+        if source == "digg":
+            items = sorted(items, key=lambda item: item.local_rank_score or 0.0, reverse=True)
         enrichment_request = {
             "source": source,
             "phase": "post_ranking_enrichment",
             "topic": topic,
             "depth": depth,
         }
-        if source == "youtube" and items and not mock:
+        _key_youtube_fixture_by_entity_count(enrichment_request, source, config)
+        if source == "youtube" and items and not mock and source not in (out_of_time or ()):
             # Same budget-at-the-survivors principle as the digg branch
             # below: retrieval-time transcripts go to each search's
             # top-by-views candidates, while final selection ranks by
@@ -3666,6 +3939,7 @@ def _finalize_items_by_source(
                 )
                 youtube_yt.backfill_transcripts(
                     items, topic=topic, depth=depth, token=sc_token,
+                    entity_count=_comparison_entity_count(config),
                 )
                 http.fixture_source_record(enrichment_request, schema.to_dict(items))
         # Post-merge topic-relevance filter for Polymarket: comparison queries
@@ -3680,16 +3954,29 @@ def _finalize_items_by_source(
             keywords = config.get("_polymarket_keywords") if isinstance(config, dict) else None
             if keywords:
                 items = polymarket.filter_items_against_keywords(items, keywords)
-        if source == "digg" and items:
-            # Pull top-ranked X posts only for the survivors that will appear
-            # in the brief. Spending the enrichment budget here (rather than
-            # at retrieval time) keeps the inline 'via Digg' quotes
-            # paired with the clusters dedupe actually kept.
+        if source == "digg" and any(not item.metadata.get(digg.STORY_ID_KEY) for item in items):
+            # Clusters from digg-pp-cli 2026.10.x only; all-topic stories got
+            # their quotes from _digg_story_sources. Pull top-ranked X posts
+            # only for the survivors that will appear in the brief. Spending
+            # the enrichment budget here (rather than at retrieval time)
+            # keeps the inline 'via Digg' quotes paired with the clusters
+            # dedupe actually kept.
             matched, replayed = http.fixture_source_replay(enrichment_request)
             if matched:
                 items = _merge_replayed_enrichment(items, replayed)
             else:
                 digg.enrich_source_items(items, top_k=3)
+                http.fixture_source_record(enrichment_request, schema.to_dict(items))
+        if source == "reddit" and items and not mock:
+            # The lane enriched its own top picks before this ranking; give
+            # the threads that survived their top comments too.
+            matched, replayed = http.fixture_source_replay(enrichment_request)
+            if matched:
+                items = _merge_replayed_enrichment(items, replayed)
+            else:
+                reddit_keyless.enrich_source_items(
+                    items, depth=depth, deadline=(config or {}).get("_research_deadline"),
+                )
                 http.fixture_source_record(enrichment_request, schema.to_dict(items))
         if source == "devto" and items and not mock:
             matched, replayed = http.fixture_source_replay(enrichment_request)
@@ -3720,6 +4007,87 @@ def _finalize_items_by_source(
     return finalized
 
 
+@dataclass
+class _DiggSourcesSpent:
+    """What a run's story-source passes have used of their shared allowance.
+
+    ``story_ids`` are the stories offered to the fetch, not every story seen.
+    """
+
+    story_ids: set[str] = field(default_factory=set)
+    seconds: float = 0.0
+
+
+def _digg_story_sources(
+    bundle: schema.RetrievalBundle,
+    *,
+    topic: str,
+    depth: str,
+    config: dict[str, Any],
+    spent: _DiggSourcesSpent | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch the prominent Digg stories' sources and attach their quotes.
+
+    Returns the map from source match key to story that
+    ``digg.tag_confirmed_candidates`` reads after fusion. Only the stories
+    the Digg bar finds prominent for ``topic`` are offered to the fetch, so
+    no other story has its sources read or confirms another result. The
+    fetch is bounded by the run's deadline and cancel signal, and a
+    comparison's runs share one story budget between them. Empty at quick
+    depth, when the run holds no prominent Digg story, and when every fetch
+    fails. Recorded and replayed as its own fixture exchange so the eval
+    harness stays offline.
+
+    ``spent`` holds the ids of the stories earlier calls in this run offered
+    to the fetch and the seconds they used, and is updated in place. A call
+    after the first offers only prominent stories that arrived since, and
+    gets only the story budget and the time those earlier calls left, so the
+    run's total stays within one budget and one
+    ``digg.SOURCES_TOTAL_SECONDS``.
+    """
+    spent = spent if spent is not None else _DiggSourcesSpent()
+    seen = spent.story_ids
+    later_pass = bool(seen)
+    entity_count = _comparison_entity_count(config)
+    budget = digg.story_budget(depth, entity_count) - min(
+        len(seen), digg.story_budget(depth, entity_count),
+    )
+    seconds_left = digg.SOURCES_TOTAL_SECONDS - spent.seconds
+    # Asked again here because the bar writes nothing on the items.
+    stories = [
+        item for item in digg.apply_bar(topic, bundle.items_by_source.get("digg", [])).prominent
+        if str(item.metadata[digg.STORY_ID_KEY]) not in seen
+    ]
+    seen.update(str(item.metadata[digg.STORY_ID_KEY]) for item in stories)
+    if not stories or budget <= 0 or seconds_left <= 0:
+        return {}
+    request = {"source": "digg", "phase": "story_sources", "topic": topic, "depth": depth}
+    if later_pass:
+        # Its own exchange, so it never replays the first pass's recording.
+        request["pass"] = "retry"
+    if entity_count > 1:
+        # A comparison run fetches fewer stories, so it never replays a
+        # single-topic recording; those keep their original keys.
+        request["comparison_entity_count"] = entity_count
+    matched, replayed = http.fixture_source_replay(request)
+    if matched:
+        fetched = replayed if isinstance(replayed, dict) else {}
+    else:
+        started = time.monotonic()
+        fetched = digg.fetch_story_sources(
+            stories, depth, stopped=lambda: _research_stopped(config),
+            # The time this run's passes have left, or the run's own
+            # deadline when that comes first.
+            deadline=_research_deadline(config, seconds_left),
+            cancel=config.get("_enrich_cancel"),
+            entity_count=entity_count,
+            budget=budget,
+        )
+        spent.seconds += time.monotonic() - started
+        http.fixture_source_record(request, fetched)
+    return digg.apply_story_sources(stories, fetched)
+
+
 def _merge_replayed_enrichment(
     items: list[schema.SourceItem],
     replayed: list[dict],
@@ -3741,12 +4109,281 @@ def _merge_replayed_enrichment(
     return items
 
 
+def _jobs_lane_budget(config: dict[str, Any]) -> jobs.LaneBudget:
+    """The one time budget the jobs lane has for this topic's run.
+
+    ``run`` puts a holder in the config before it copies it for its passes,
+    so the first pass, a retry after a server error and the thin-results
+    retry all draw on the same budget. A comparison gives each entity an
+    equal share.
+    """
+    holder = config.get("_jobs_lane")
+    budget = holder.get("budget") if isinstance(holder, dict) else None
+    if budget is None:
+        budget = jobs.LaneBudget(
+            jobs.JOBS_BUDGET_SECONDS / max(1, _comparison_entity_count(config)),
+        )
+        if isinstance(holder, dict):
+            holder["budget"] = budget
+    return budget
+
+
+def _host_companies(company: dict[str, Any]) -> list[str]:
+    """The companies the host named (``--company``, then ``--ticker``), in order."""
+    names = [str(name) for name in company.get("host_companies") or [] if name]
+    single = str(company.get("host_company") or "")
+    if single and single not in names:
+        names.insert(0, single)
+    return names
+
+
+def _search_jobs_lane(
+    company: dict[str, Any],
+    topic: str,
+    *,
+    config: dict[str, Any],
+    depth: str,
+    date_range: tuple[str, str],
+    web_backend: str,
+) -> tuple[list[dict], dict]:
+    """Search the board of the company the topic resolved to.
+
+    A person's name searches the company they lead, starting from its
+    official site. When the lookup named no company and the topic has no
+    board of its own (a person, searched by name), each company the host
+    named with ``--company`` or ``--ticker`` is tried in order and the first one with a board
+    is used. Those come with no official site, so a board gives a digest only
+    when it names that company itself. Every company tried draws on one
+    budget, and a board that is not the topic's own says whose it is under
+    ``board_of``.
+    """
+    budget = _jobs_lane_budget(config)
+    if budget.settled or budget.spent():
+        # This run's lane already has its answer, or no time left to look.
+        return [], {}
+    name = str(company.get("company") or topic)
+    hosts = [] if company.get("company") else _host_companies(company)
+    tries = 1 + len(hosts)
+    site = str(company.get("company_site") or company.get("topic_site") or "")
+    # The official site the resolver returned for a company the host named.
+    host_sites = {
+        str(key): str(value)
+        for key, value in (company.get("host_company_sites") or {}).items() if value
+    }
+
+    def named(found: dict) -> dict:
+        # A board that is not the topic's own says whose it is.
+        of = str(found.get("company") or name)
+        if not jobs._same_company(of, topic):
+            found["board_of"] = of
+        return found
+
+    # The board the host found by web search is read first. One that is the
+    # company's ends the lane; any other is kept only if the lane finds no
+    # board itself.
+    held: tuple[list[dict], dict] | None = None
+    board_url = str(config.get("_jobs_board") or "").strip()
+    if board_url:
+        with http.tee_failures() as failures:
+            host_items, host_artifact = jobs.search_board_url(
+                board_url, [name, *hosts], date_range, config,
+                site=site, sites=host_sites,
+                explicit=bool(config.get("_hiring_signals_mode")), budget=budget,
+                # Until the board is known to be the company's it has one
+                # share of the budget, like each company still to be tried.
+                discovery_seconds=budget.remaining() / (1 + tries),
+            )
+        if _is_jobs_board("jobs", host_artifact):
+            if host_artifact.get("owned"):
+                budget.settled = True
+                return host_items, named(host_artifact)
+            held = (host_items, host_artifact)
+
+    def search(target: str, left: int, **where: Any) -> tuple[list[dict], dict]:
+        return jobs.search_jobs(
+            target,
+            date_range,
+            config,
+            depth=depth,
+            explicit=bool(config.get("_hiring_signals_mode")),
+            entity_count=_comparison_entity_count(config),
+            budget=budget,
+            # Finding one company's board may use an equal share of what is
+            # left, so the next company still gets its turn.
+            discovery_seconds=budget.remaining() / left if left > 1 else None,
+            **where,
+        )
+
+    with http.tee_failures() as failures:
+        items, artifact = search(
+            name,
+            tries,
+            web_backend=web_backend,
+            site=site,
+        )
+        if _is_jobs_board("jobs", artifact):
+            if not jobs._same_company(name, topic):
+                artifact["board_of"] = name
+        else:
+            for index, host_company in enumerate(hosts):
+                host_items, host_artifact = search(
+                    host_company, tries - 1 - index, web_backend="none",
+                    **({"site": host_sites[host_company]} if host_company in host_sites else {}),
+                )
+                if _is_jobs_board("jobs", host_artifact):
+                    host_artifact["board_of"] = host_company
+                    items, artifact = host_items, host_artifact
+                    break
+                # The topic's own result stands, with the reason the budget
+                # ended the search when it did.
+                for key in ("_source_outcome", "_source_out_of_time"):
+                    if key in host_artifact and not items:
+                        artifact = {**artifact, key: host_artifact[key]}
+                # A named company whose job site is known and not read keeps
+                # its footer line; the first such company is the one named.
+                unreadable = host_artifact.get("job_site_unreadable")
+                if unreadable and not artifact.get("job_site_unreadable"):
+                    artifact = {
+                        **artifact, "job_site_unreadable": unreadable,
+                        "job_site_unreadable_reason": host_artifact.get("job_site_unreadable_reason", ""),
+                    }
+    if held and not _is_jobs_board("jobs", artifact):
+        items, artifact = held[0], named(held[1])
+        # A board tied to no company here is shown under the name it states.
+        stated = str(artifact.get("board_company") or "")
+        if stated and not jobs._same_company(stated, topic):
+            artifact["board_of"] = stated
+    if not items and not _is_jobs_board("jobs", artifact) and not (
+        budget.stopped_at or budget.spent() or budget.unanswered
+        or artifact.get("job_site_unreadable")
+    ):
+        jobs.log_no_board([name, *hosts])
+    # Nothing failed and time was left: the answer will not change on a
+    # second pass. A failure or a spent budget leaves the retry its chance
+    # within what is left of the budget.
+    budget.settled = _is_jobs_board("jobs", artifact) or not (
+        failures or budget.stopped_at or budget.spent() or budget.unanswered
+    )
+    return items, artifact
+
+
+def _is_jobs_board(source: str, artifact: Any) -> bool:
+    """Whether a jobs fetch read the company's board directly."""
+    return source == "jobs" and isinstance(artifact, dict) and artifact.get("tier") == "ats"
+
+
+def _jobs_board_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
+    """The board data a run keeps, with no digest when the caller asked for none."""
+    if env.jobs_digest_disabled():
+        return {key: value for key, value in artifact.items() if key != "digest"}
+    return artifact
+
+
+def _rejected_job_keys(
+    candidates: list[schema.Candidate],
+    ranked: list[schema.Candidate],
+    board: Any,
+    topic: str,
+) -> list[str]:
+    """The postings ranking dropped, which the hiring sections then leave out.
+
+    Ranking judges a posting against the topic's name. On the company's own
+    board that is a fair test of a stray posting when the topic is the
+    company, whose postings name it. When the topic is the person who leads
+    the company, no posting names the topic, so ranking drops every one it
+    looks at: that says nothing about the roles, and none is recorded.
+    """
+    if (
+        isinstance(board, dict)
+        and board.get("owned")
+        and not jobs._same_company(str(board.get("company") or ""), topic)
+    ):
+        return []
+    retained_ids = {candidate.candidate_id for candidate in ranked}
+    return sorted({
+        fusion.candidate_key(item)
+        for candidate in candidates
+        if candidate.candidate_id not in retained_ids
+        for item in candidate.source_items
+        if item.source == "jobs"
+    })
+
+
+def _engine_ranked_job_urls(
+    ranked: list[schema.Candidate],
+    hiring_summary: dict[str, Any] | None,
+) -> list[str]:
+    """Posting URLs of the roles the run itself put highest, best first.
+
+    Two lists, taken in turn: the job postings in ranking order, and the
+    roles the Hiring Signals block names (its strategic single roles, then
+    the evidence under each theme, as many of each as the block prints) when
+    the run has that block. Postings the ranking rejected are left out.
+    """
+    summary = hiring_summary if isinstance(hiring_summary, dict) else {}
+    rejected = set(summary.get("rejected_job_keys") or [])
+    ranked_urls = [
+        item.url
+        for candidate in ranked
+        for item in candidate.source_items
+        if item.source == "jobs" and item.url and fusion.candidate_key(item) not in rejected
+    ]
+    named: list[str] = []
+    if summary.get("include") or summary.get("mode") == "explicit":
+        named.extend(
+            str(role.get("url") or "") for role in (summary.get("strategic_candidates") or [])[:8]
+        )
+        for signal in (summary.get("signals") or [])[:4]:
+            named.extend(str(role.get("url") or "") for role in (signal.get("evidence") or [])[:3])
+    urls: list[str] = []
+    for index in range(max(len(ranked_urls), len(named))):
+        for source_urls in (ranked_urls, named):
+            if index < len(source_urls) and source_urls[index] and source_urls[index] not in urls:
+                urls.append(source_urls[index])
+    return urls
+
+
+def _add_ranked_roles_to_jobs_digest(
+    bundle: schema.RetrievalBundle,
+    ranked: list[schema.Candidate],
+    hiring_summary: dict[str, Any] | None,
+) -> None:
+    """Give the Jobs Digest the roles this run ranked highest.
+
+    The digest is chosen by rarity when the board is read, before anything is
+    ranked, and the report's hiring section is written from the digest alone.
+    Up to ``jobs_digest.ENGINE_ROLE_SLOTS`` of its places go to the ranked
+    roles it left out. The board's rows are dropped afterwards.
+    """
+    rows, bundle.jobs_board_rows = bundle.jobs_board_rows, []
+    board = bundle.artifacts.get("jobs")
+    digest = board.get("digest") if isinstance(board, dict) else None
+    if not rows or not isinstance(digest, dict) or not digest.get("roles"):
+        return
+    # Roles the board keeps out of the digest (Apple's retail store roles)
+    # stay out however well they rank.
+    rows = [row for row in rows if not row.get("digest_excluded")]
+    # Ranking sees normalized items; the digest holds the board's own URLs.
+    board_urls = {fusion._normalize_url(str(row.get("url") or "")): str(row["url"])
+                  for row in rows if row.get("url")}
+    urls = [
+        board_urls[key]
+        for key in (fusion._normalize_url(url) for url in _engine_ranked_job_urls(ranked, hiring_summary))
+        if key in board_urls
+    ]
+    board["digest"] = jobs_digest.add_engine_roles(digest, rows, list(dict.fromkeys(urls)))
+
+
 def _apply_hiring_signal_gate(
     bundle: schema.RetrievalBundle,
     *,
     explicit: bool,
     topic: str,
 ) -> dict[str, Any] | None:
+    # On a standard run, a board whose titles cluster into no clear theme
+    # leaves the evidence pool, so scattered postings are not ranked and
+    # clustered beside what people said. The board's counts and digest live in
+    # ``bundle.artifacts["jobs"]`` and are not touched here.
     jobs_items = bundle.items_by_source.get("jobs") or []
     if not jobs_items:
         if explicit:
@@ -3784,7 +4421,10 @@ def _ensure_devto_in_plan(plan: schema.QueryPlan, available: list[str]) -> None:
 # in (INCLUDE_SOURCES, --search, a targeting flag). A host plan that names none
 # of them in any subquery almost always means the host planner never knew to
 # list them, not that it chose to skip them, so they ride the primary subquery.
-# Paid lanes with their own host decision step (amazon, meta_ads) stay out;
+# A lane that cannot run this session (Trustpilot with no browser session or
+# cached record) is never added: the host skipped it on purpose.
+# Paid lanes with their own host decision step (amazon, meta_ads) stay out
+# unless this run asked for them (HOST_PLAN_PAID_LANES below);
 # EXCLUDE_SOURCES and --search already filter ``available``.
 HOST_PLAN_BACKFILL_SOURCES = (
     "digg",
@@ -3801,17 +4441,87 @@ HOST_PLAN_BACKFILL_SOURCES = (
 )
 
 
+# Paid lanes the host requests per run outside the plan (runbook Step 0.5e /
+# 0.5f): source -> (config key of its targeting flag, log label). They join a
+# host plan only when this run asked: the source is in --search, or its
+# targeting flag is set. INCLUDE_SOURCES alone makes the lane available but
+# leaves the per-topic decision with the host.
+HOST_PLAN_PAID_LANES = {
+    "amazon": ("_amazon_query", "Amazon"),
+    "meta_ads": ("_meta_ads_page", "Meta Ads"),
+}
+
+
+def _paid_lanes_asked_for(
+    requested_sources: list[str] | None,
+    config: dict[str, Any] | None,
+) -> list[str]:
+    requested = requested_sources or []
+    return [
+        source for source, (flag_key, _label) in HOST_PLAN_PAID_LANES.items()
+        if source in requested or str((config or {}).get(flag_key) or "").strip()
+    ]
+
+
+def _backfill_lane_can_run(
+    source: str,
+    config: dict[str, Any] | None,
+    requested_sources: list[str] | None,
+    trustpilot_domain: str | None,
+) -> bool:
+    """Whether a backfill candidate could return data in this session.
+
+    Backfill exists for lanes the host forgot, so it must not add one the
+    host was told to skip because it cannot run now. Trustpilot needs a
+    browser session or a cached company record (``trustpilot_can_run`` in
+    --diagnose); without one the lane is a guaranteed SESSION_NEEDED skip.
+    An explicit ask (--search trustpilot, --trustpilot-domain) still adds it,
+    so the user sees why it did not run. Local reads only."""
+    if source != "trustpilot":
+        return True
+    if trustpilot_domain or "trustpilot" in (requested_sources or []):
+        return True
+    return bool(trustpilot.can_run_now(config).get("can_run"))
+
+
 def _ensure_unplanned_lanes_in_host_plan(
     plan: schema.QueryPlan,
     available: list[str],
+    *,
+    asked: list[str] | tuple[str, ...] = (),
+    installed: bool = True,
+    config: dict[str, Any] | None = None,
+    requested_sources: list[str] | None = None,
+    trustpilot_domain: str | None = None,
 ) -> None:
     if not plan.subqueries:
         return
     planned = {source for subquery in plan.subqueries for source in subquery.sources}
-    missing = [
-        source for source in HOST_PLAN_BACKFILL_SOURCES
-        if source in available and source not in planned
-    ]
+    candidates = (*(HOST_PLAN_BACKFILL_SOURCES if installed else ()), *asked)
+    missing = []
+    for source in candidates:
+        if source not in available or source in planned or source in missing:
+            continue
+        if source in asked or _backfill_lane_can_run(
+            source, config, requested_sources, trustpilot_domain,
+        ):
+            missing.append(source)
+        else:
+            log.source_log(
+                "Planner",
+                f"Not adding {source} to the --plan: it cannot run this session "
+                "(no browser session or cached record; see trustpilot_can_run "
+                "in --diagnose).",
+                tty_only=False,
+            )
+    for source, (_flag_key, label) in HOST_PLAN_PAID_LANES.items():
+        if source in available and source not in planned and source not in missing:
+            log.source_log(
+                label,
+                "available but not requested for this run; not run "
+                f"(add {source} to --search to run it).",
+                tty_only=False,
+            )
     if not missing:
         return
     plan.subqueries[0].sources.extend(missing)
@@ -3820,9 +4530,40 @@ def _ensure_unplanned_lanes_in_host_plan(
     plan.source_weights = planner._normalize_weights(plan.source_weights)
     log.source_log(
         "Planner",
-        "Added installed/opted-in sources absent from every --plan subquery to "
+        "Added installed/opted-in/requested sources absent from every --plan subquery to "
         f"{plan.subqueries[0].label}: {', '.join(missing)} "
         "(set EXCLUDE_SOURCES to skip them).",
+        tty_only=False,
+    )
+
+
+def _ensure_company_jobs_in_host_plan(
+    plan: schema.QueryPlan,
+    available: list[str],
+    company_signal: str,
+) -> None:
+    """Give the jobs lane the primary subquery of a host plan about a company.
+
+    ``company_signal`` says what makes the run about a company (the official
+    site, a host ticker or company, the company the topic resolved to); with
+    none the plan is left as it is, so a musician or a concept gets no jobs
+    lane. ``available`` already leaves jobs out under EXCLUDE_SOURCES or a
+    ``--search`` list without it.
+    """
+    if not company_signal or "jobs" not in available or not plan.subqueries:
+        return
+    if "drill-mode" in plan.notes:
+        return
+    if any("jobs" in subquery.sources for subquery in plan.subqueries):
+        return
+    plan.subqueries[0].sources.append("jobs")
+    plan.source_weights.setdefault("jobs", 1.0)
+    plan.source_weights = planner._normalize_weights(plan.source_weights)
+    log.source_log(
+        "Planner",
+        f"Added jobs to {plan.subqueries[0].label}: the run is about a company "
+        f"({company_signal}) and no --plan subquery names it "
+        "(set EXCLUDE_SOURCES=jobs to skip it).",
         tty_only=False,
     )
 
@@ -3899,47 +4640,7 @@ def _ensure_perplexity_in_plan(
     plan.source_weights = planner._normalize_weights(plan.source_weights)
 
 
-def _company_topic_likely(topic: str) -> bool:
-    text = topic.strip()
-    if not text:
-        return False
-    lower = text.lower()
-    if "?" in text or len(text.split()) > 4:
-        return False
-    generic = {
-        "how", "what", "why", "best", "top", "tutorial", "guide", "prompts",
-        "news", "latest", "ideas", "examples",
-    }
-    if any(word in generic for word in lower.split()):
-        return False
-    known_single_word_companies = {
-        "apple", "uber", "google", "microsoft", "amazon", "meta", "netflix",
-        "openai", "anthropic", "qualtrics", "stripe", "brex",
-    }
-    if " vs " in lower or " versus " in lower:
-        parts = re.split(r"\s+(?:vs|versus)\s+", text, maxsplit=1, flags=re.IGNORECASE)
-        if len(parts) != 2:
-            return False
-        return _comparison_side_company_like(parts[0], known_single_word_companies) or _comparison_side_company_like(
-            parts[1], known_single_word_companies
-        )
-    return bool(text[:1].isupper() or lower in known_single_word_companies)
-
-
-def _comparison_side_company_like(side: str, known_companies: set[str]) -> bool:
-    token = re.sub(r"[^\w.+#-]", "", side.strip().split()[0] if side.strip() else "")
-    if not token:
-        return False
-    lower = token.lower()
-    common_tech_terms = {
-        "python", "ruby", "javascript", "typescript", "java", "go", "golang",
-        "rust", "php", "swift", "kotlin", "scala", "clojure", "elixir",
-        "react", "vue", "angular", "svelte", "node", "django", "rails",
-        "postgres", "mysql", "redis", "kubernetes", "docker",
-    }
-    if lower in common_tech_terms:
-        return False
-    return bool(token[:1].isupper() or lower in known_companies)
+_company_topic_likely = company_resolve.company_topic_likely
 
 
 def _warnings(
@@ -4044,6 +4745,75 @@ def _classify_source_failure(exc: Exception) -> tuple[schema.RunOutcomeState, bo
         message=detail,
     )
     return state, True
+
+
+def _reddit_on_topic_count(
+    items: list[dict],
+    from_date: str,
+    to_date: str,
+    ranking_query: str,
+    freshness_mode: str | None,
+) -> int:
+    """How many free Reddit threads will survive this stream's relevance prune.
+
+    The ScrapeCreators floor is measured on this, not on the raw count: a run
+    whose site search is refused still returns dozens of listing threads from
+    the targeted subreddits, nearly all pruned as off topic a moment later
+    ("relevance prune dropped 99 of 106"), so the raw count never fell under
+    the floor and the backfill never ran. Same normalize, annotate and prune
+    as ``_normalize_score_dedupe``; on any error the raw count is used.
+    """
+    if not items:
+        return 0
+    try:
+        mode = freshness_mode or "balanced_recent"
+        normalized = normalize.normalize_source_items(
+            "reddit", copy.deepcopy(items), from_date, to_date, freshness_mode=mode,
+        )
+        days = (date.fromisoformat(to_date) - date.fromisoformat(from_date)).days
+        annotated = signals.annotate_stream(
+            normalized, relevance.PreparedQuery(ranking_query), mode,
+            reference_date=to_date, max_days=days,
+        )
+        return len(signals.prune_low_relevance(annotated, passing_only=True))
+    except Exception:
+        return len(items)
+
+
+def _run_reddit_backfill(config: dict[str, Any], call) -> Any:
+    """Run the ScrapeCreators backfill, giving up shortly before the stream
+    wait ends so a slow backfill cannot turn the free threads into a timeout.
+    Raises ``TimeoutError`` when it does not finish in time."""
+    research_deadline = config.get("_research_deadline")
+    if research_deadline is None:
+        return call()
+    remaining = research_deadline - REDDIT_SC_BACKFILL_RETURN_MARGIN_SECONDS - time.monotonic()
+    if remaining < REDDIT_SC_BACKFILL_MIN_SECONDS:
+        raise TimeoutError("no time left in the run's budget for the ScrapeCreators backfill")
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = http.submit_with_context(executor, call)
+        try:
+            return future.result(timeout=remaining)
+        except TimeoutError:
+            raise TimeoutError(
+                f"ScrapeCreators backfill did not finish in {remaining:.0f}s"
+            ) from None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _reddit_search_blocked_artifact(items: list[dict]) -> dict[str, Any]:
+    """Mark Reddit partial when its site search was refused and threads came
+    from subreddit listings alone; ``{}`` when search worked or nothing came."""
+    reason = reddit_search.failed_reason()
+    if not reason or not items:
+        return {}
+    return _outcome_artifact(
+        health.PARTIAL,
+        f"Reddit site search was blocked ({reason}); threads come from subreddit "
+        "listings only",
+    )
 
 
 def _outcome_artifact(
@@ -4224,9 +4994,9 @@ def _finalize_source_status(
         elif state == health.OK and not count:
             state = outcome.lane_failure_state or schema.NO_RESULTS
         elif state == schema.PARTIAL and not count:
-            if source == "digg" and digg.is_stale_note(detail):
-                # A stale Digg copy that matched nothing is an empty answer
-                # with a coverage note, not a failed search.
+            if source == "digg" and digg.is_upgrade_note(detail):
+                # An older Digg CLI that matched nothing is an empty answer
+                # with an upgrade note, not a failed search.
                 state = schema.NO_RESULTS
             else:
                 state = http.classify_failure(message=detail or "")
@@ -4397,6 +5167,7 @@ def _run_supplemental_searches(
     x_dicts = [
         {"author_handle": item.author or "", "text": item.body or ""}
         for item in bundle.items_by_source.get("x", [])
+        if entity_extract.matches_person_identity(item, plan.person_identity_anchors, x_handle)
     ]
     reddit_dicts = [
         {
@@ -4897,8 +5668,12 @@ def _retry_thin_sources(
     first_party_handles: Iterable[str] | None = None,
     first_party_by_source: Mapping[str, Iterable[str]] | None = None,
     run_started: float | None = None,
+    out_of_time_sources: set[str] | None = None,
 ) -> None:
-    """Retry sources with thin results using simplified core subject query."""
+    """Retry sources with thin results using simplified core subject query.
+
+    Sources whose retry ran out of time are added to ``out_of_time_sources``.
+    """
     if depth == "quick":
         return
     # No new paid/network work after the enrichment budget expired.
@@ -4945,7 +5720,9 @@ def _retry_thin_sources(
 
     def _retry_one_source(
         source: str,
-    ) -> tuple[str, list[schema.SourceItem], dict[str, Any] | None]:
+    ) -> tuple[
+        str, list[schema.SourceItem], dict[str, Any] | None, tuple, bool, dict[str, Any] | None,
+    ]:
         raw_items, artifact = _retrieve_stream(
             topic=topic,
             subquery=retry_subquery,
@@ -4973,6 +5750,8 @@ def _retry_thin_sources(
         outcome_note = artifact.get("_source_outcome") if isinstance(artifact, dict) else None
         detail_note = artifact.get("_source_outcome_detail") if isinstance(artifact, dict) else None
         detail_state = artifact.get("_source_outcome_detail_state") if isinstance(artifact, dict) else None
+        out_of_time = isinstance(artifact, dict) and bool(artifact.get("_source_out_of_time"))
+        bar_notes: list[str] = []
         normalized = _normalize_score_dedupe(
             source,
             raw_items,
@@ -4988,17 +5767,30 @@ def _retry_thin_sources(
             # later resolved-handle floor cannot recover a post that never
             # entered the bundle.
             defer_relevance_prune=(source == "x"),
+            before_dedupe=_digg_bar_before_dedupe(
+                settings, topic, retry_subquery.label, bar_notes,
+            ) if source == "digg" else None,
         )
         if source == "jobs":
-            return source, normalized, outcome_note, (detail_note, detail_state)
-        normalized = _apply_reddit_stream_keepers(
-            source, normalized, settings["per_stream_limit"], topic
-        )
+            return (
+                source, normalized, outcome_note, (detail_note, detail_state), out_of_time,
+                (artifact, list(raw_items)) if _is_jobs_board(source, artifact) else None,
+            )
+        if source == "digg":
+            normalized, _ = _apply_digg_bar(
+                normalized, settings, topic, retry_subquery.label,
+            )
+            for bar_note in bar_notes:
+                detail_note = f"{detail_note}; {bar_note}" if detail_note else bar_note
+        else:
+            normalized = _apply_reddit_stream_keepers(
+                source, normalized, settings["per_stream_limit"], topic
+            )
         if isinstance(artifact, dict) and artifact.get("_source_outcome_deferred"):
             outcome_note = outcome_note or artifact["_source_outcome_deferred"]
         if not normalized and isinstance(artifact, dict):
             outcome_note = outcome_note or artifact.get("_source_outcome_if_empty")
-        return source, normalized, outcome_note, (detail_note, detail_state)
+        return source, normalized, outcome_note, (detail_note, detail_state), out_of_time, None
 
     retryable = [s for s in thin_sources if s not in rate_limited_sources]
 
@@ -5014,7 +5806,10 @@ def _retry_thin_sources(
         for future in done:
             source = futures[future]
             try:
-                source, normalized, outcome_note, (detail_note, detail_state) = future.result(timeout=0)
+                (
+                    source, normalized, outcome_note, (detail_note, detail_state), out_of_time,
+                    jobs_board,
+                ) = future.result(timeout=0)
             except Exception as exc:
                 print(f"[Pipeline] Retry failed for {source}: {type(exc).__name__}: {exc}", file=sys.stderr)
                 state, attempted = _classify_source_failure(exc)
@@ -5025,6 +5820,8 @@ def _retry_thin_sources(
                     attempted=attempted,
                 )
                 continue
+            if out_of_time and out_of_time_sources is not None:
+                out_of_time_sources.add(source)
             try:
                 if outcome_note:
                     bundle.record_failure(
@@ -5041,6 +5838,11 @@ def _retry_thin_sources(
                 if new_items:
                     primary_label = plan.subqueries[0].label if plan.subqueries else "primary"
                     bundle.add_items(primary_label, source, new_items)
+                # A board read only on this retry still gives the footer its
+                # counts and the report its digest.
+                if jobs_board and "jobs" not in bundle.artifacts:
+                    bundle.artifacts["jobs"] = _jobs_board_artifact(jobs_board[0])
+                    bundle.jobs_board_rows = jobs_board[1]
             except Exception as exc:
                 print(f"[Pipeline] Retry failed for {source}: {type(exc).__name__}: {exc}", file=sys.stderr)
                 state, attempted = _classify_source_failure(exc)
@@ -5205,6 +6007,7 @@ def _retrieve_stream(*args, **kwargs) -> tuple[list[dict], dict]:
         "date_range": list(kwargs.get("date_range") or ()),
         "depth": kwargs.get("depth") or "",
     }
+    _key_youtube_fixture_by_entity_count(fixture_request, source, kwargs.get("config"))
     module_backed = source in {
         "reddit",
         "x",
@@ -5493,15 +6296,34 @@ def _fetch_youtube_stream(
     """Search, backfill, transcribe, and comment-enrich one YouTube query."""
     # An abandoned lane keeps running after the report is saved; once the
     # run is over, every ScrapeCreators call in it is wasted credit (#1315).
+    deadline = config.get("_research_deadline")
     with youtube_yt.sc_spend_until(
         lambda: _research_stopped(config),
         cancel=config.get("_enrich_cancel"),
-        deadline=config.get("_research_deadline"),
+        deadline=deadline,
+        return_deadline=(
+            deadline - youtube_yt._LANE_RETURN_MARGIN_SECONDS
+            if deadline is not None else None
+        ),
     ):
         return _fetch_youtube_stream_live(
             yt_query, from_date, to_date, depth, config,
             has_ytdlp=has_ytdlp, freshness_mode=freshness_mode,
         )
+
+
+def _comparison_entity_count(config: dict[str, Any] | None) -> int:
+    return int((config or {}).get("_comparison_entity_count") or 1)
+
+
+def _key_youtube_fixture_by_entity_count(
+    request: dict[str, Any], source: str, config: dict[str, Any] | None,
+) -> None:
+    # Only comparison runs carry the count, so fixtures already recorded for
+    # single-topic runs keep their original keys.
+    entity_count = _comparison_entity_count(config)
+    if source == "youtube" and entity_count > 1:
+        request["comparison_entity_count"] = entity_count
 
 
 def _interpreter_shutting_down(exc: BaseException) -> bool:
@@ -5530,12 +6352,13 @@ def _fetch_youtube_stream_live(
         config.get("SCRAPECREATORS_API_KEY", "")
         if env.is_youtube_sc_available(config) else None
     )
+    entity_count = _comparison_entity_count(config)
     # Try yt-dlp first; the SC transcript fallback covers per-video failures.
     if has_ytdlp:
         try:
             result = youtube_yt.search_and_transcribe(
                 yt_query, from_date, to_date, depth=depth, token=sc_token,
-                freshness_mode=freshness_mode,
+                freshness_mode=freshness_mode, entity_count=entity_count,
             )
             if result.get("error"):
                 youtube_failure = str(result["error"])
@@ -5544,7 +6367,10 @@ def _fetch_youtube_stream_live(
             result = None
             # Not an empty yt-dlp result: the process is exiting.
             run_over = _interpreter_shutting_down(exc)
-    run_over = run_over or _research_stopped(config)
+    out_of_time = (result or {}).get("out_of_time")
+    if not out_of_time and youtube_yt._lane_out_of_time():
+        out_of_time = "lane deadline passed"
+    run_over = run_over or bool(out_of_time) or _research_stopped(config)
     free_items = list((result or {}).get("items") or [])
     min_items = env.youtube_sc_min_items(config)
     backfill_thin = bool(free_items) and len(free_items) < min_items
@@ -5565,7 +6391,7 @@ def _fetch_youtube_stream_live(
                 sc_result = youtube_yt.search_youtube_sc(
                     yt_query, from_date, to_date, depth=depth, token=sc_token,
                     skip_transcript_ids=transcribed_free_ids,
-                    freshness_mode=freshness_mode,
+                    freshness_mode=freshness_mode, entity_count=entity_count,
                 )
             sc_error = str(sc_result["error"]) if sc_result.get("error") else None
             if backfill_thin:
@@ -5623,8 +6449,22 @@ def _fetch_youtube_stream_live(
         result = {"items": []}
     # Enrich top videos with comments (default-on when a key is present).
     items = youtube_yt.parse_youtube_response(result)
-    if items and env.is_youtube_comments_available(config):
-        youtube_yt.enrich_with_comments(items, token=sc_token or "")
+    if not out_of_time and youtube_yt._lane_out_of_time():
+        out_of_time = "lane deadline passed"
+    if items and env.is_youtube_comments_available(config) and not out_of_time:
+        youtube_yt.enrich_with_comments(
+            items, token=sc_token or "", entity_count=entity_count,
+        )
+    if not out_of_time and youtube_yt._lane_out_of_time():
+        out_of_time = "lane deadline passed"
+    if out_of_time:
+        detail = f"youtube timed out: {out_of_time}"
+        if thin_detail or youtube_failure:
+            detail += f"; {thin_detail or youtube_failure}"
+        return items, {
+            **_outcome_artifact(health.TIMEOUT, detail),
+            "_source_out_of_time": True,
+        }
     if thin_detail:
         if not thin_error:
             return items, {"_source_outcome_detail": thin_detail}
@@ -5690,13 +6530,15 @@ def _retrieve_stream_impl(
         return grounding.web_search(
             subquery.search_query, date_range, config, backend=web_backend)
     if source == "jobs":
-        return jobs.search_jobs(
+        # The company the topic resolved to, so a person's name searches the
+        # board of the company they lead, starting from its official site.
+        return _search_jobs_lane(
+            config.get("_company") or {},
             raw_topic or topic or subquery.search_query,
-            date_range,
-            config,
+            config=config,
             depth=depth,
+            date_range=date_range,
             web_backend=web_backend,
-            explicit=bool(config.get("_hiring_signals_mode")),
         )
     if source == "reddit":
         # Use raw_topic so expand_reddit_queries() generates diverse variants
@@ -5772,11 +6614,20 @@ def _retrieve_stream_impl(
         min_items = env.reddit_sc_min_items(config)
         public_results: list[dict] = []
         public_failure: Exception | None = None
+        # The lane returns what it has before the stream wait gives up on
+        # it; a lane still running then is reported as a timeout with nothing.
+        research_deadline = config.get("_research_deadline")
+        lane_deadline = (
+            research_deadline - REDDIT_LANE_RETURN_MARGIN_SECONDS
+            - (REDDIT_SC_BACKFILL_RESERVE_SECONDS if has_sc_key else 0.0)
+            if research_deadline is not None else None
+        )
         try:
-            public_results = reddit_public.search_reddit_public(
-                reddit_query, from_date, to_date, depth=depth,
-                subreddits=subreddits, dedicated_subreddits=dedicated_subreddits,
-            ) or []
+            with reddit_keyless.lane_deadline(lane_deadline):
+                public_results = reddit_public.search_reddit_public(
+                    reddit_query, from_date, to_date, depth=depth,
+                    subreddits=subreddits, dedicated_subreddits=dedicated_subreddits,
+                ) or []
         except Exception as exc:
             public_failure = exc
             sys.stderr.write(
@@ -5787,15 +6638,38 @@ def _retrieve_stream_impl(
                 state = reddit.classify_run_failure(str(exc))
                 raise SourceRunError(f"Reddit public search failed: {exc}", state) from exc
             sys.stderr.write(", using ScrapeCreators backup\n")
-        # Enough free results, or no key to backfill with -> done. max(min_items,
-        # 1) keeps the default (min_items=0) as empty-only AND treats exactly
-        # `min_items` results as acceptable (no backfill) for min_items > 0.
-        if len(public_results) >= max(min_items, 1) or not has_sc_key:
-            return public_results, {}
+        free_timed_out = (
+            not public_results and public_failure is None
+            and reddit_keyless._out_of_time(lane_deadline)
+        )
+        if free_timed_out and not has_sc_key:
+            # The lane started with no budget left (queued behind slower
+            # streams): that is a timeout, not a topic nobody posted about.
+            return [], _outcome_artifact(
+                health.TIMEOUT,
+                "Reddit had no time left in the run's budget before it found threads",
+            )
+        # The floor counts the free threads that are on topic for this stream,
+        # the ones its relevance prune will keep. Enough of them, or no key to
+        # backfill with -> done. max(min_items, 1) keeps the default
+        # (min_items=0) as empty-only AND treats exactly `min_items` results
+        # as acceptable (no backfill) for min_items > 0.
+        on_topic = _reddit_on_topic_count(
+            public_results, from_date, to_date,
+            subquery.ranking_query or reddit_query, freshness_mode,
+        ) if has_sc_key and min_items > 0 else len(public_results)
+        if on_topic >= max(min_items, 1) or not has_sc_key:
+            return public_results, _reddit_search_blocked_artifact(public_results)
         if public_results:
             sys.stderr.write(
                 f"[Reddit] Free path returned {len(public_results)} "
-                f"(below the {min_items}-item floor); backfilling with ScrapeCreators\n"
+                f"({on_topic} on topic, below the {min_items}-item floor); "
+                "backfilling with ScrapeCreators\n"
+            )
+        elif free_timed_out:
+            sys.stderr.write(
+                "[Reddit] Free path ran out of time with no threads; "
+                "backfilling with ScrapeCreators\n"
             )
         # With free items in hand, scope the backfill's own HTTP failures
         # away from the stream's capture sink: a ScrapeCreators 429 is not a
@@ -5809,11 +6683,11 @@ def _retrieve_stream_impl(
         )
         try:
             with backfill_scope as backfill_failures:
-                result = reddit.search_and_enrich_memo(
+                result = _run_reddit_backfill(config, lambda: reddit.search_and_enrich_memo(
                     reddit_query, from_date, to_date, depth=depth,
                     token=config.get("SCRAPECREATORS_API_KEY"),
                     subreddits=subreddits,
-                )
+                ))
             sc_items = reddit.parse_reddit_response(result)
         except Exception as exc:
             sys.stderr.write(
@@ -6099,6 +6973,7 @@ def _retrieve_stream_impl(
                 env.is_youtube_sc_available(config),
                 env.youtube_sc_min_items(config),
                 env.is_youtube_comments_available(config),
+                _comparison_entity_count(config),
             ),
             lambda: _fetch_youtube_stream(
                 yt_query, from_date, to_date, depth, config, has_ytdlp=has_ytdlp,
@@ -6113,6 +6988,9 @@ def _retrieve_stream_impl(
         tiktok_query = raw_topic or subquery.search_query
 
         def _fetch_tiktok() -> tuple[list[dict], dict]:
+            # Leave time to publish collected videos before the outer stream wait expires.
+            deadline = _research_deadline(config, STREAM_FUTURE_TIMEOUT_SECONDS) - 1.0
+            cancel = config.get("_enrich_cancel")
             result = tiktok.search_and_enrich(
                 tiktok_query,
                 from_date,
@@ -6121,11 +6999,20 @@ def _retrieve_stream_impl(
                 token=env.get_tiktok_token(config),
                 hashtags=tiktok_hashtags,
                 creators=tiktok_creators,
+                deadline=deadline,
+                cancel=cancel,
             )
             items = tiktok.parse_tiktok_response(result)
-            if items and env.is_tiktok_comments_available(config):
+            if (
+                items
+                and env.is_tiktok_comments_available(config)
+                and result.get("error") != tiktok.BUDGET_ERROR
+            ):
                 sc_token = config.get("SCRAPECREATORS_API_KEY", "")
-                tiktok.enrich_with_comments(items, token=sc_token)
+                try:
+                    tiktok.enrich_with_comments(items, token=sc_token, deadline=deadline, cancel=cancel)
+                except http.DeadlineExceeded:
+                    result["error"] = tiktok.BUDGET_ERROR
             return items, _result_outcome_artifact(source, result)
 
         return fetch_memo.fetch_once(
@@ -6241,17 +7128,29 @@ def _retrieve_stream_impl(
         # subquery's search, so share the identical CLI call within a run.
         result = fetch_memo.fetch_once(
             ("digg", subquery.search_query, from_date, to_date, depth),
-            lambda: digg.search_digg(subquery.search_query, from_date, to_date, depth=depth),
+            lambda: digg.search_digg(
+                subquery.search_query, from_date, to_date, depth=depth,
+                include_top_scored=True,
+                deadline=config.get("_research_deadline"),
+                cancel=config.get("_enrich_cancel"),
+            ),
             timeout=_memo_wait_seconds(config),
             cacheable=_clean_search_result,
         )
-        items = digg.parse_digg_response(result, query=subquery.search_query)
+        items = digg.parse_digg_response(
+            result, query=subquery.search_query, from_date=from_date,
+        )
         # Enrichment with attached X posts is deferred to
         # _finalize_items_by_source so it runs on the items that actually
         # survive dedupe rather than on top-K of the raw fanout.
-        stale = digg.stale_note(result)
-        if stale:
-            return items, _outcome_artifact(health.PARTIAL, stale)
+        upgrade = digg.upgrade_note(result)
+        if upgrade:
+            return items, _outcome_artifact(health.PARTIAL, upgrade)
+        score_pass = digg.score_pass_note(result)
+        if score_pass:
+            # The most relevant stories arrived, so Digg stays OK and the
+            # lost highest-scored half is a note on its outcome.
+            return items, {"_source_outcome_detail": score_pass}
         return items, _result_outcome_artifact(source, result)
     if source == "arxiv":
         result = arxiv.search_arxiv(subquery.search_query, from_date, to_date, depth=depth)
@@ -6278,6 +7177,10 @@ def _retrieve_stream_impl(
             explicit_domain=trustpilot_domain,
             domain_is_hint=trustpilot_domain_is_hint,
         )
+        if result.get("needs_session"):
+            # An expected skip (no browser is ever opened for a session), not
+            # a failure: recorded like a board that cannot answer the window.
+            return [], {"_source_skipped": str(result.get("skipped") or "")}
         return (
             trustpilot.parse_trustpilot_response(result, query=relevance_topic),
             _result_outcome_artifact(source, result),
@@ -6322,7 +7225,7 @@ def _retrieve_stream_impl(
             artifact = dict(artifact) if artifact else {}
             artifact["_source_outcome"] = {
                 "state": schema.PARTIAL,
-                "detail": review_status,
+                "detail": amazon.outcome_detail(review_status),
                 "attempted": True,
             }
 
@@ -6410,7 +7313,10 @@ def _retrieve_stream_impl(
         # lookup and gh-CLI subprocess fallback (up to 5s timeout each).
         token = github.resolve_token(config.get("GITHUB_TOKEN"))
         response = github.search_github(subquery.search_query, from_date, to_date, depth=depth, token=token)
-        items = github.parse_github_response(response)
+        # Judge results against the stable research topic, not the narrowed
+        # per-subquery search_query, as polymarket does above.
+        relevance_topic = raw_topic or topic or subquery.search_query
+        items = github.parse_github_response(response, topic=relevance_topic)
         # Note: an unauth rate-limit (response["error"]) is expected on the
         # tokenless anon tier and returns empty here rather than raising — github
         # is now always eligible, so raising would spam "github failed" on every

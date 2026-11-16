@@ -54,7 +54,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from . import backends, brightdata, env, health, http, prescriptions, reddit_search, x_api
+from . import backends, brightdata, digg, env, health, http, prescriptions, reddit_search, trustpilot, x_api
 from .backends import TIER_ERROR, TIER_OK, TIER_WARN
 
 # Rollup tiers (R1). ok/warn/error are U2's; only "off" is doctor's own.
@@ -165,6 +165,7 @@ SOURCE_ORDER = (
     "digg",
     "techmeme",
     "arxiv",
+    "yahoo_finance",
     "trustpilot",
     "amazon",
     "meta_ads",
@@ -179,6 +180,7 @@ SOURCE_ORDER = (
     "pinterest",
     "xiaohongshu",
     "jobs",
+    "patents",
     "library",
 )
 
@@ -192,6 +194,7 @@ CLI_DEPENDENCIES = {
     "digg": "digg-pp-cli",
     "techmeme": "techmeme-pp-cli",
     "arxiv": "arxiv-pp-cli",
+    "yahoo_finance": "yahoo-finance-pp-cli",
     "trustpilot": "trustpilot-pp-cli",
     # The only entry that also needs auth; _amazon_record reports the
     # installed-but-unauthenticated state the shared CLI helper cannot.
@@ -500,6 +503,10 @@ def _x_record(config):
     # auto-chain backend in ERROR/DEGRADED/BROKEN/TIMEOUT. Same rule as the
     # grok normalizer: only upgrade when no auto backend is configured-but-broken.
     auto_chain_names = set(env.x_auto_chain(config))
+    all_auto_missing = all(
+        b.get("status") == health.MISSING
+        for b in record.get("backends", []) if b.get("name") in auto_chain_names
+    )
     pending_bird = policy.cookie_discovery and env.x_pending_browser_auth(
         config, local_only=True
     )
@@ -521,13 +528,8 @@ def _x_record(config):
         record["note"] = f"{record['note']}; {observation}" if record["note"] else observation
         return record
     if (pending_bird or denied_browsers) and record["status"] in ("unconfigured", health.ERROR):
-        backends_list = record.get("backends", [])
-        auto_backends = [b for b in backends_list if b.get("name") in auto_chain_names]
         # Only apply pending-bird upgrade if ALL auto-chain backends are MISSING.
         # If any auto backend is configured but broken, keep that error.
-        all_auto_missing = all(
-            b.get("status") == health.MISSING for b in auto_backends
-        )
         if all_auto_missing:
             if denied_browsers:
                 record["status"] = health.ERROR
@@ -548,6 +550,28 @@ def _x_record(config):
                     "- add XAI_API_KEY for a verified, cookie-free path)"
                 )
             record["fix"] = ""
+            return record
+    # PATH presence explains an unconfigured sidecar; it does not authorize it.
+    # Refusals, backend pins and configured failures retain their own diagnosis.
+    if (
+        not policy.official_only
+        and not record.get("pinned")
+        and all_auto_missing
+        and record["status"] in ("unconfigured", health.ERROR)
+        and not env.cookie_access_denied(config)
+        and str(config.get("AGENTCOOKIE") or env.read_secret_env("AGENTCOOKIE") or "").strip().lower() != "off"
+    ):
+        from . import agentcookie
+
+        if (
+            agentcookie.is_disabled(config)
+            and env.x_extras_enabled(config)
+            and shutil.which(agentcookie.AGENTCOOKIE_BIN)
+        ):
+            record["status"] = "opt-in"
+            record["tier"] = TIER_OFF
+            record["note"] = "agentcookie is on PATH; sidecar cookie access is not enabled"
+            record["fix"] = "set AGENTCOOKIE=on to allow sidecar X cookie reads"
             return record
     #
     # Grok is opt-in only: a leftover ~/.grok/auth.json must never steal the X
@@ -577,12 +601,8 @@ def _x_record(config):
         and not pending_bird
     ):
         backends_list = record.get("backends", [])
-        auto_backends = [b for b in backends_list if b.get("name") in auto_chain_names]
         # Only normalize if ALL auto-chain backends are MISSING (not configured).
         # If any auto backend is ERROR/DEGRADED/BROKEN/TIMEOUT, keep that error.
-        all_auto_missing = all(
-            b.get("status") == health.MISSING for b in auto_backends
-        )
         if not all_auto_missing:
             # An auto-chain backend is configured but broken — do NOT normalize.
             # Keep the original error and its repair guidance.
@@ -705,7 +725,25 @@ def _digg_record(config):
     probe = health.probe_dependency("digg-pp-cli")
     requires = "digg-pp-cli on the agent-subprocess PATH"
     if probe.ok:
-        return _record(status=health.OK, detail=probe.detail, requires=requires)
+        if probe.outdated:
+            # Below the oldest release the engine can call, so its searches
+            # fail: degraded, with the pinned upgrade as the fix. The detail
+            # names both versions.
+            return _record(
+                status=health.DEGRADED, fix=probe.prescription,
+                note="digg-pp-cli is older than the engine can call; upgrade it",
+                detail=probe.detail, requires=requires,
+            )
+        if digg.cli_searches_all_topics() is not False:
+            # Current, or its help could not be read: nothing known to fix.
+            return _record(status=health.OK, detail=probe.detail, requires=requires)
+        # An older CLI still answers, on AI and tech only, so the source
+        # stays ok and carries the upgrade as its fix.
+        outdated = prescriptions.get("digg", "pp_cli_outdated")
+        return _record(
+            status=health.OK, fix=_fix_text(outdated), note=outdated.cause,
+            detail=probe.detail, requires=requires,
+        )
     entry = prescriptions.for_dependency_probe(probe)
     fix = _fix_text(entry) if entry else probe.prescription
     if probe.status == health.MISSING and not probe.off_path:
@@ -741,8 +779,41 @@ def _arxiv_record(config):
     return _cli_gated_record(config, "arxiv-pp-cli", "arxiv")
 
 
+def _yahoo_finance_record(config):
+    """The share-price line. Unlike a search source it runs only for a topic
+    that resolves to a listed company, so a working install records nothing on
+    most runs; the note says so, so that quiet is not read as a fault."""
+    record = _cli_gated_record(config, "yahoo-finance-pp-cli", "yahoo_finance")
+    if record["status"] == health.OK:
+        record["note"] = (
+            "share-price line for topics that resolve to a listed company; "
+            "no price line on other topics is expected"
+        )
+    return record
+
+
 def _trustpilot_record(config):
-    return _cli_gated_record(config, "trustpilot-pp-cli", "trustpilot")
+    """Installed is not the same as able to run: the lane needs a browser
+    session that lasts four minutes, or a cached company record."""
+    record = _cli_gated_record(config, "trustpilot-pp-cli", "trustpilot")
+    if record["status"] != health.OK:
+        return record
+    state = trustpilot.can_run_now(config)
+    if state["session_fresh"]:
+        record["note"] = "browser session is fresh; can run now"
+    elif state["cached_companies"]:
+        count = state["cached_companies"]
+        record["note"] = (
+            f"no fresh browser session; {count} cached company "
+            f"record{'s' if count != 1 else ''} can be read"
+        )
+    else:
+        record["note"] = (
+            "cannot run now: no fresh browser session and no cached company record "
+            "(a research run never opens a browser; `trustpilot-pp-cli auth login` "
+            "gives a session for about 3 minutes)"
+        )
+    return record
 
 
 def _amazon_record(config):
@@ -937,6 +1008,21 @@ def _jobs_record(config):
     )
 
 
+def _patents_record(config):
+    """The patent digest. Like the share-price line it runs only for a topic
+    that is a company, and a company may have published nothing, so a quiet
+    run is the usual case; the note says so."""
+    return _record(
+        status="opt-in",
+        requires="none (public USPTO search); activates for company topics",
+        note=(
+            "on-demand source: no configuration needed; no patents line is "
+            "expected for topics that are not companies, for companies with "
+            "no filings in the window, or if USPTO starts requiring sign-in"
+        ),
+    )
+
+
 def _count_saved_briefs(memory_dir) -> int:
     """Cheap count of saved research briefs (directory listing, no file parse).
 
@@ -1001,6 +1087,7 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "digg": _digg_record,
     "techmeme": _techmeme_record,
     "arxiv": _arxiv_record,
+    "yahoo_finance": _yahoo_finance_record,
     "trustpilot": _trustpilot_record,
     "amazon": _amazon_record,
     "meta_ads": _meta_ads_record,
@@ -1015,6 +1102,7 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
     "pinterest": _pinterest_record,
     "xiaohongshu": _xiaohongshu_record,
     "jobs": _jobs_record,
+    "patents": _patents_record,
     "library": _library_record,
 }
 
@@ -1031,7 +1119,10 @@ _SOURCE_BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
 # doctor-cache block below already uses for its own schema stamp).
 # ---------------------------------------------------------------------------
 
-REPORT_CACHE_SCHEMA_VERSION = "last30days-report-cache/v1"
+# Must equal last30days.REPORT_CACHE_VERSION: a stamp the engine no longer
+# writes makes every run read as "No saved run found"
+# (tests/test_doctor_postmortem_after_run.py holds the two together).
+REPORT_CACHE_SCHEMA_VERSION = "last30days-report-cache/v2"
 REPORT_CACHE_FILENAME = "last-report.json"
 DEFAULT_REPORT_CACHE_TTL_SECONDS = 3600
 
@@ -1734,6 +1825,7 @@ def _config_fingerprint(config: Dict[str, Any]) -> str:
         "x_cookie_access_denied": str(config.get("LAST30DAYS_X_COOKIE_ACCESS_DENIED") or ""),
         "browser_consent": str(config.get("BROWSER_CONSENT") or ""),
         "from_browser": str(config.get("FROM_BROWSER") or ""),
+        "agentcookie": str(config.get("AGENTCOOKIE") or env.read_secret_env("AGENTCOOKIE") or ""),
     }
     canonical = json.dumps(signals, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -2139,6 +2231,16 @@ def run(
             # failure serving the cache falls through to a live run.
             pass
     report = build_report(config)
+    if not cached:
+        # An explicit doctor is how a user asks for a fresh look: the report
+        # above still shows a cached grok audit failure, and dropping it here
+        # makes the next run re-audit the build.
+        try:
+            from . import grok_audit
+
+            grok_audit.clear_failed()
+        except Exception:
+            pass
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     report["from_cache"] = False
 
