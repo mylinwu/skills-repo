@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "d68ef323-1d1a-4b56-8c36-2e457e11b5d5",
+  "path": "hairline-create",
+  "path_key": "hairline-create",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "lucasmarkes/hairline/hairline-create",
+    "subpath": "skills\\hairline-create",
+    "branch": null
+  }
+}
