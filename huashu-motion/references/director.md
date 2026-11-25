@@ -17,7 +17,9 @@ screenshots, logo, brand colours, existing launch posts, the data file. Note in 
 - **The one thing** this film must leave behind (see §2). If the user did not say it, propose it.
 - **Personality** on five sliders (§3), with the evidence you read it from (the site's type, its
   copy, its colours). Brand assets beat adjectives: use the real logo, colours and type.
-- **Real material**: UI you can rebuild or screenshot, numbers with sources, footage, a voice.
+- **Real material**, collected before anything is drawn (`om grab <folder>` for the project on this
+  machine, `om grab <url>` for the site and repo; run the product and capture it): the logo file,
+  the interface, numbers with sources, footage, a voice.
   Real material is the strongest thing in a film; a faithful rebuild of the product's own UI beats
   any invented mock-up. Every string, number and default you put on screen must point to a real
   screenshot, recording or page; what you cannot point to is not shown. Footage the user gives (a
@@ -42,7 +44,8 @@ screenshots, logo, brand colours, existing launch posts, the data file. Note in 
 examples; read it now.
 
 Ask only what you cannot find or infer, in one message, with your defaults written in: "I'll assume
-X unless you say otherwise." Always settle narration once (none / system voice / their recording).
+X unless you say otherwise." When the request is one line, offer the few decisions that change the film
+most with a default and two alternatives named by real references (SKILL.md, step 1). Always settle narration once (none / system voice / their recording).
 
 ## 2. Find the shape of the message
 
@@ -104,6 +107,12 @@ films were material: a pure code recording versus live footage with UI cards gro
 - **A · Fit** — the language the message shape and personality point to. The safe, excellent choice.
 - **B · Amplify** — the same message pushed: a bolder language or a stronger device (one continuous
   take instead of scenes, type as the hero instead of UI, a 3D world instead of flat).
+- **Depth, and only once:** exactly one of the three is a depth direction (it can be A, B or C,
+  whichever the product suits) and the other two use languages with no 3D as their idea, so the
+  user always has depth to choose and always has something else. Which you recommend follows the
+  product and the brief: depth for a premium launch, a physical or iconic object, an interface
+  with layers worth separating; another language when the message is a sentence, a list, a
+  changelog, a mechanism, or the user's words point elsewhere.
 - **C · Unexpected** — a different language that still carries the message and suits the brand
   (an art-history reimagining, a character story, an editorial collage). It must still be about
   the product; novelty for its own sake is not a direction. Patterns that worked in Oct 2026: the
@@ -129,12 +138,13 @@ Palette:         <role #hex share · …> — from: <where each colour came from
 Logline:         <the film in one sentence, with the hook and the ending>
 Why it fits:     <message shape + personality sentence → this>
 Feel:            <route (continuous / montage / hybrid), BPM, events per bar, what the first 3 s show with the sound off>
-Sound:           <music character, BPM, the 2–3 hits that matter>
 Risk:            <what could make it fail, e.g. "needs real UI screenshots">
 ```
 
-Find the colours before drawing anything and vary the colour strategy across the three
-([colour.md](colour.md)); `om swatch directions.md` renders the three palettes side by side and
+Music is not on the cards. Most users can't judge a music world from a name, and asking them to is a decision they don't want: once a direction is chosen, you find a real track ([music-sources.md](music-sources.md): the user's own, a tool in the environment, `om music`, an open library) and write it into the treatment (track, source, licence, bpm and confidence from `om beats`). The synthesized worlds in [music.md](music.md) are the fallback. Offer music options only when the user asks for a say in it; when they name a style or a track, use theirs.
+
+Take the colours from the product before drawing anything; the three use the brand's palette
+differently rather than inventing new ones ([colour.md](colour.md)); `om swatch directions.md` renders the three palettes side by side and
 warns when they share the house look. Show that PNG with the key frames.
 
 Let the user pick (or mix). Users mix by layer — "c's composition and people, b's feeling", or one
@@ -184,8 +194,9 @@ From 142 high-engagement films of Sep–Oct 2026: 40 from the Claude Motion wave
 launches, 54 from the top of a prompt gallery. They describe what worked, not why; likes depend on
 the account. Defaults, not laws: break one when the direction calls for it and say why.
 
-1. **Start moving.** Frame 1 already has motion or an unresolved shape. The hook can be the result
-   first, a prompt being typed, or a question on screen; it is never a static title card. (Films
+1. **Start moving.** Frame 0 is the poster feeds and players show before the film plays: the subject is already in it. From there it already has motion or an unresolved shape. The hook can be the result
+   first, a prompt being typed, or a question on screen; it is never a static title card, and never a lone object fading or glowing in on an empty dark
+   frame (the usual opening of a one-line film; it reads as a screensaver). (Films
    built around a person open on the person.)
 2. **Choose the route on purpose.** Continuous — one world, few cuts, an object carried from scene
    to scene (morph, flood, push-through, shared element) — was the median of the short UI films on X
@@ -200,11 +211,18 @@ the account. Defaults, not laws: break one when the direction calls for it and s
    a signature move to use on purpose, not a requirement. A film at the same
    energy from start to end is boring however good each frame is; `om sound` prints the energy of
    every stretch and flags a flat one. Narrated or ambient films follow the voice instead.
-4. **Real product.** The product's actual UI and words, rebuilt crisply with a cursor doing real
-   clicks, or a clean recording of the real thing. Never a screenshot panned around. Prompts and code
+4. **Real product.** The product's actual UI and words: a clean capture or recording of the real
+   thing, or — when it has to move — a code rebuild traced over a capture with a cursor doing real
+   clicks. Never grey placeholder boxes, never a UI invented because it was quicker, and never a
+   placeholder where a photo, avatar or thumbnail belongs: use the product's own, a real one found
+   online, or an openly licensed one, with its source in materials.md. Never a screenshot panned around. Prompts and code
    shown on screen count as real material.
+   **Depth is a choice the user makes.** One of the three directions is in depth (the interface
+   as layers in space, the logo and screens as objects in a studio), the other two are not; which
+   one wins depends on the product and the brief. When depth is chosen, the camera carries the whole
+   film in space, not just its opening. [depth.md](depth.md)
 5. **Craft shows at rest.** Every hold is a poster: type set properly, one accent, no default fonts.
-6. **Sound.** Long films and films with people are sound-led; short UI films and loops must read
+6. **Sound.** No film goes to the user without music: a real track, chosen before the cuts so the rhythm sheet starts from its bar lines and drops (`om beats`). Long films and films with people are sound-led; short UI films and loops must read
    with the sound off (a silent, self-explaining loop was among the most saved films). Each landing
    gets a hit. Social masters at −14 LUFS, see [sound.md](sound.md).
 7. **End right.** A launch ends on the mark (a URL pill is optional; several top launches had none).
