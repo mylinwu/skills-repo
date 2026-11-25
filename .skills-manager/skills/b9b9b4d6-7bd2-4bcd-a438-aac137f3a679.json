@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "b9b9b4d6-7bd2-4bcd-a438-aac137f3a679",
+  "path": "bilibili-downloader",
+  "path_key": "bilibili-downloader",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "958877748/skills/bilibili-downloader",
+    "subpath": "skills/bilibili-downloader",
+    "branch": null
+  }
+}
