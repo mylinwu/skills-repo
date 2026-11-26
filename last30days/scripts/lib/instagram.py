@@ -5,6 +5,9 @@ engagement metrics (views, likes, comments), and fetch video transcripts.
 
 Requires SCRAPECREATORS_API_KEY in config. 100 free API calls, then PAYG.
 API docs: https://scrapecreators.com/docs
+
+When the key is missing or ScrapeCreators returns 402, search_and_enrich
+falls back to web discovery + yt-dlp (lib.shortform_oss).
 """
 
 import json
@@ -23,6 +26,13 @@ from .query import infer_query_intent
 from .relevance import token_overlap_relevance as _compute_relevance
 
 SCRAPECREATORS_BASE = "https://api.scrapecreators.com"
+
+
+def _sc_base() -> str:
+    if SCRAPECREATORS_BASE != "https://api.scrapecreators.com":
+        return SCRAPECREATORS_BASE
+    from . import env
+    return env.get_scrapecreators_base_url()
 
 # Depth configurations: how many results to fetch / captions to extract
 DEPTH_CONFIG = {
@@ -127,7 +137,7 @@ def _get_reels_search(
     cancel: threading.Event | None,
 ) -> dict[str, Any]:
     return http.get(
-        f"{SCRAPECREATORS_BASE}/v2/instagram/reels/search",
+        f"{_sc_base()}/v2/instagram/reels/search",
         params={"query": query},
         headers=http.scrapecreators_headers(token),
         retries=2,
@@ -259,8 +269,16 @@ def _parse_items(raw_items: List[Dict[str, Any]], core_topic: str) -> List[Dict[
         else:
             text = raw.get("desc", raw.get("text", ""))
 
-        # Engagement metrics
-        play_count = raw.get("video_play_count") or raw.get("video_view_count") or raw.get("play_count") or 0
+        # Engagement metrics (keep missing play counts as None so unreported
+        # views are distinct from a measured 0).
+        play_count = next(
+            (
+                raw[k]
+                for k in ("video_play_count", "video_view_count", "play_count")
+                if raw.get(k) is not None
+            ),
+            None,
+        )
         like_count = raw.get("like_count") or 0
         comment_count = raw.get("comment_count") or 0
 
@@ -329,7 +347,7 @@ def _user_reels(
     if _budget_expired(deadline, cancel):
         return []
     _log(f"User reels: @{handle}")
-    reels_url = f"{SCRAPECREATORS_BASE}/v1/instagram/user/reels"
+    reels_url = f"{_sc_base()}/v1/instagram/user/reels"
     try:
         data = http.get(
             reels_url,
@@ -385,7 +403,14 @@ def _normalize_google_post(
         "url": url,
         "caption": caption or "",
         "taken_at": media.get("taken_at_timestamp") or media.get("created_at"),
-        "video_play_count": media.get("video_play_count") or 0,
+        "video_play_count": next(
+            (
+                media[k]
+                for k in ("video_play_count", "video_view_count", "play_count")
+                if media.get(k) is not None
+            ),
+            None,
+        ),
         "like_count": likes or 0,
         "comment_count": comments or 0,
         "owner": media.get("owner") or media.get("user") or {},
@@ -433,7 +458,7 @@ def _google_reel_fallback(
             # with a swallowed 404 once the adapter reports a clean result.
             with http.expected_misses(404):
                 data = http.get(
-                    f"{SCRAPECREATORS_BASE}/v1/google/search",
+                    f"{_sc_base()}/v1/google/search",
                     params={
                         "query": (
                             f"site:instagram.com/reel {topic} "
@@ -515,7 +540,7 @@ def _google_reel_fallback(
             return None
         try:
             payload = http.get(
-                f"{SCRAPECREATORS_BASE}/v1/instagram/post",
+                f"{_sc_base()}/v1/instagram/post",
                 params={"url": url},
                 headers=headers,
                 retries=1,
@@ -691,7 +716,7 @@ def search_instagram(
         _log(f"No reels within date range, keeping all {len(items)}")
 
     # Sort by views descending
-    items.sort(key=lambda x: x["engagement"]["views"], reverse=True)
+    items.sort(key=lambda x: x.get("engagement", {}).get("views") or 0, reverse=True)
 
     _log(f"Found {len(items)} Instagram reels")
     if _budget_expired(deadline, cancel):
@@ -768,7 +793,7 @@ def fetch_captions(
             # poison the entire source outcome (#829).
             with http.capture_failures() as _tf:
                 data = http.get(
-                    f"{SCRAPECREATORS_BASE}/v2/instagram/media/transcript",
+                    f"{_sc_base()}/v2/instagram/media/transcript",
                     params={"url": url},
                     headers=http.scrapecreators_headers(token),
                     retries=1,
@@ -801,6 +826,7 @@ def search_and_enrich(
     depth: str = "default",
     token: str = None,
     ig_creators: List[str] | None = None,
+    config: Dict[str, Any] | None = None,
     *,
     deadline: float | None = None,
     cancel: threading.Event | None = None,
@@ -809,6 +835,7 @@ def search_and_enrich(
 
     Uses expand_instagram_queries() to generate multiple search queries,
     runs ScrapeCreators for each, and merges/deduplicates results by video ID.
+    Falls back to keyless web discovery + yt-dlp when the key is missing or 402s.
 
     Args:
         topic: Search topic (raw topic, not planner's narrowed query)
@@ -817,10 +844,15 @@ def search_and_enrich(
         depth: 'quick', 'default', or 'deep'
         token: ScrapeCreators API key
         ig_creators: Optional list of Instagram creator handles to fetch reels from
+        config: Optional env config (discovery keys for the OSS fallback)
+        deadline: Shared monotonic deadline for search and enrichment
+        cancel: Optional research cancellation event
 
     Returns:
         Dict with 'items' list. Each item has a 'caption_snippet' field.
     """
+    from . import shortform_oss
+
     core_topic = _extract_core_subject(topic)
     seen_ids: Set[str] = set()
     items: List[Dict[str, Any]] = []
@@ -840,38 +872,42 @@ def search_and_enrich(
                     seen_ids.add(vid)
                     items.append(item)
 
-    # Step 1: Multi-query keyword search — run ScrapeCreators for each expanded query
-    queries = expand_instagram_queries(topic, depth)
-    fallback_pages, fallback_posts = GOOGLE_FALLBACK_BUDGETS.get(
-        depth, GOOGLE_FALLBACK_BUDGETS["default"]
-    )
-    fallback_cache: dict[str, dict[str, Any]] = {}
-    for index, q in enumerate(queries):
-        if _budget_expired(deadline, cancel):
-            break
-        query_count = len(queries)
-        query_budget = {
-            "pages": fallback_pages // query_count
-            + (1 if index < fallback_pages % query_count else 0),
-            "posts": fallback_posts // query_count
-            + (1 if index < fallback_posts % query_count else 0),
-        }
-        search_result = search_instagram(
-            q, from_date, to_date, depth, token,
-            _fallback_budget=query_budget, _fallback_cache=fallback_cache,
-            deadline=deadline, cancel=cancel,
+    # Step 1: Multi-query keyword search — run ScrapeCreators for each expanded
+    # query. Without a token every call would just fail with "No
+    # SCRAPECREATORS_API_KEY configured", so skip straight to the OSS fallback
+    # (mirrors tiktok.search_and_enrich's ``if token:`` guard).
+    if token:
+        queries = expand_instagram_queries(topic, depth)
+        fallback_pages, fallback_posts = GOOGLE_FALLBACK_BUDGETS.get(
+            depth, GOOGLE_FALLBACK_BUDGETS["default"]
         )
-        if search_result.get("error"):
-            error = search_result["error"]
-            state = search_result.get("_error_state") or http.classify_failure(message=error)
-            query_errors.append((error, state))
-            if not search_result.get("_discovery_only_error"):
-                last_error = error
-        for item in search_result.get("items", []):
-            vid = item.get("video_id", "")
-            if vid and vid not in seen_ids:
-                seen_ids.add(vid)
-                items.append(item)
+        fallback_cache: dict[str, dict[str, Any]] = {}
+        for index, q in enumerate(queries):
+            if _budget_expired(deadline, cancel):
+                break
+            query_count = len(queries)
+            query_budget = {
+                "pages": fallback_pages // query_count
+                + (1 if index < fallback_pages % query_count else 0),
+                "posts": fallback_posts // query_count
+                + (1 if index < fallback_posts % query_count else 0),
+            }
+            search_result = search_instagram(
+                q, from_date, to_date, depth, token,
+                _fallback_budget=query_budget, _fallback_cache=fallback_cache,
+                deadline=deadline, cancel=cancel,
+            )
+            if search_result.get("error"):
+                error = search_result["error"]
+                state = search_result.get("_error_state") or http.classify_failure(message=error)
+                query_errors.append((error, state))
+                if not search_result.get("_discovery_only_error"):
+                    last_error = error
+            for item in search_result.get("items", []):
+                vid = item.get("video_id", "")
+                if vid and vid not in seen_ids:
+                    seen_ids.add(vid)
+                    items.append(item)
 
     # Sort merged results by views descending
     items.sort(key=lambda x: x.get("engagement", {}).get("views") or 0, reverse=True)
@@ -883,18 +919,44 @@ def search_and_enrich(
         )[0]
     if _budget_expired(deadline, cancel):
         last_error = RESEARCH_TIMEOUT
+
+    # OSS fallback: web discovery + yt-dlp when the key is missing or credits
+    # are exhausted. Bounded by the same deadline/cancel as the paid path.
+    from_oss = False
+    if not items and (not token or shortform_oss.credits_exhausted(last_error)):
+        cfg = config
+        if cfg is None:
+            from . import env as envmod
+            cfg = envmod.get_config()
+        oss = shortform_oss.search(
+            "instagram", topic, from_date, to_date, depth, cfg,
+            deadline=deadline, cancel=cancel,
+        )
+        items = oss.get("items") or []
+        from_oss = bool(items)
+        if from_oss:
+            last_error = None
+        elif not token or not last_error:
+            # No paid loop ran (or produced nothing to say): a fallback
+            # failure must surface, not hide behind a budget-stop message.
+            # With a token, the ScrapeCreators error keeps priority — it is
+            # the root cause the fallback just failed to rescue.
+            last_error = oss.get("error") or last_error
+
     if not items:
         return {"items": [], "error": last_error}
 
-    # Step 2: Fetch captions for top N
-    captions = fetch_captions(items, token, depth, deadline=deadline, cancel=cancel)
+    # Step 2: Fetch captions for top N. OSS items already carry
+    # caption_snippet from the video description and spend no credits.
+    if not from_oss:
+        captions = fetch_captions(items, token, depth, deadline=deadline, cancel=cancel)
 
-    # Step 3: Attach captions to items
-    for item in items:
-        vid = item["video_id"]
-        caption = captions.get(vid)
-        if caption:
-            item["caption_snippet"] = caption
+        # Step 3: Attach captions to items
+        for item in items:
+            vid = item["video_id"]
+            caption = captions.get(vid)
+            if caption:
+                item["caption_snippet"] = caption
 
     if _budget_expired(deadline, cancel):
         last_error = RESEARCH_TIMEOUT
@@ -1001,7 +1063,7 @@ def _fetch_post_comments(
         return []
     try:
         data = http.get(
-            f"{SCRAPECREATORS_BASE}/v2/instagram/post/comments",
+            f"{_sc_base()}/v2/instagram/post/comments",
             params={"url": post_url},
             headers=http.scrapecreators_headers(token),
             retries=2,

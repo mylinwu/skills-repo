@@ -26,6 +26,7 @@ _SUBJECT_POSTS_HEADING = re.compile(r"^## Posts by (@\S+)$", re.MULTILINE)
 _JOBS_DIGEST_HEADING = "## Jobs Digest"
 _PATENT_DIGEST_HEADING = "## Patent Digest"
 _POLYMARKET_HEADING = "## Polymarket Markets"
+_PERSON_PROFILE_HEADING = "## Person Profile"
 # Registers and shapes whose template has no story paragraphs or quote lines.
 _REGISTERS_WITHOUT_QUOTE_LINES = frozenset({"exec"})
 
@@ -74,6 +75,16 @@ def on_claude_code(environ: Mapping[str, Any] | None = None) -> bool:
     """True when the run's environment carries Claude Code's ``CLAUDECODE``."""
     source = os.environ if environ is None else environ
     return bool(str(source.get("CLAUDECODE") or "").strip())
+
+
+def claude_code_in_terminal(environ: Mapping[str, Any] | None = None) -> bool:
+    """True when Claude Code runs as the terminal app (``CLAUDE_CODE_ENTRYPOINT``
+    is ``cli``, or unset on older builds). Only the terminal redraws links as
+    ``name (url)`` while a markdown list streams; T3 Code (``sdk-ts``), the
+    desktop app and IDEs render the markdown themselves."""
+    source = os.environ if environ is None else environ
+    entrypoint = str(source.get("CLAUDE_CODE_ENTRYPOINT") or "").strip()
+    return entrypoint in ("", "cli")
 
 
 def build(
@@ -138,16 +149,23 @@ def build(
                 "Shape: `> 📊 Polymarket · Huang divorce: 9.5% by Dec 31 (down 1 pt today) · "
                 "18% by Mar 31, 2027`. They do not count toward the six quote lines."
             )
-    if on_claude_code(environ):
+    if on_claude_code(environ) and claude_code_in_terminal(environ):
         lines.append(
-            "• `CLAUDECODE` is set: no markdown lists anywhere in the reply "
-            "(KEY PATTERNS as `1\\.`, invitation lines as `•`, with a blank line between each: "
-            "a single line break joins them into one paragraph in a markdown renderer). "
+            "• `CLAUDECODE` is set in the terminal: no markdown lists anywhere in the reply "
+            "(KEY PATTERNS as `1\\.`, invitation lines as `•`). Keep each block tight: "
+            "end every line of the block except its last with `\\` (the label line too) and "
+            "leave no blank line between them; a markdown viewer joins plain line breaks. "
             "In a reply that holds a list, "
             "Claude Code prints every link as raw `name (url)` text. This holds for the whole "
             "message, not only the report: notes you add before or after it carry no bullets or "
             "numbered lines either, and it holds again whenever you show the report in a later "
             "message."
+        )
+    elif on_claude_code(environ):
+        lines.append(
+            "• `CLAUDECODE` is set in an app that renders markdown: write KEY PATTERNS as a "
+            "real numbered list and the invitation as a real bulleted list, with no blank line "
+            "between items."
         )
     if not comparison:
         # One line for both digests: the checklist stays a few lines long.
@@ -182,7 +200,17 @@ def build(
                 f"This output has no `{_PATENT_DIGEST_HEADING}` block, so the report has "
                 "no Patent Secret Signals section."
             )
-        lines.append(f"• {jobs} {patents}")
+        digests = f"• {jobs} {patents}"
+        if _has_heading(rendered, _PERSON_PROFILE_HEADING):
+            # Shares the digest line: the checklist stays a few lines long.
+            digests += (
+                f" This output has a `{_PERSON_PROFILE_HEADING}` block: call the person quiet "
+                "only when it says `LinkedIn: checked` and gives a count of zero LinkedIn posts in "
+                "the window (not `unknown`); otherwise "
+                "name the sources that were not checked. Use no fact from an item that does not "
+                "match the person's identity, and say so when identity is uncertain."
+            )
+        lines.append(digests)
     lines.append(
         "• The fenced footer (```text ... ```) is copied whole, fence included, "
         "after the body and before the invitation."
