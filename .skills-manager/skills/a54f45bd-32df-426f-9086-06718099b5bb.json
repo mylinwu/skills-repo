@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "skill_id": "a54f45bd-32df-426f-9086-06718099b5bb",
+  "path": "lemo-opuscar",
+  "path_key": "lemo-opuscar",
+  "enabled": true,
+  "tags": [],
+  "source": {
+    "type": "skillssh",
+    "ref": "lemomo-ai/lemo-opuscar/lemo-opuscar",
+    "subpath": "plugin/skills/lemo-opuscar",
+    "branch": null
+  }
+}
